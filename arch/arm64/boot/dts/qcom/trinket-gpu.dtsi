@@ -15,6 +15,7 @@
 		compatible = "qcom,pil-tz-generic";
 		qcom,pas-id = <13>;
 		qcom,firmware-name = "a610_zap";
+        qcom,minidump-id = <9>;
 	};
 
 	msm_bus: qcom,kgsl-busmon{
@@ -256,10 +257,12 @@
 		clocks = <&clock_gcc GCC_BIMC_GPU_AXI_CLK>,
 			<&clock_gcc GCC_GPU_MEMNOC_GFX_CLK>,
 			<&clock_gcc GCC_SYS_NOC_COMPUTE_SF_AXI_CLK>,
-			<&clock_gpucc GPU_CC_HLOS1_VOTE_GPU_SMMU_CLK>;
+			<&clock_gpucc GPU_CC_HLOS1_VOTE_GPU_SMMU_CLK>,
+            <&clock_gcc GCC_GPU_MEMNOC_GFX_CLK>; 
 
 		clock-names = "mem_clk", "mem_iface_clk",
-				"alt_mem_iface_clk", "smmu_vote";
+				"alt_mem_iface_clk", "smmu_vote",
+                "gcc_gpu_memnoc_gfx_clk";
 
 		qcom,unmap_fast;
 		qcom,retention;
