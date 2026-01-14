@@ -726,22 +726,33 @@ ifdef CONFIG_CC_OPTIMIZE_FOR_SIZE
 KBUILD_CFLAGS   += -Os
 else
 KBUILD_CFLAGS   += -O2
+ifeq ($(ARCH),arm64)
 ifeq ($(cc-name),clang)
-KBUILD_CFLAGS	+= -mcpu=cortex-a53 -mtune=cortex-a53
+# Force target to prevent x86_64 fallback
+KBUILD_CFLAGS += --target=aarch64-linux-gnu
+KBUILD_AFLAGS += --target=aarch64-linux-gnu
+# Apply CPU Tuning
+KBUILD_CFLAGS += -mcpu=cortex-a73+crc+crypto -mtune=cortex-a53 -march=armv8-a+crc+crypto 
+KBUILD_AFLAGS += -mcpu=cortex-a73+crc+crypto -mtune=cortex-a53 -march=armv8-a+crc+crypto 
 
 ifdef CONFIG_LLVM_POLLY
 KBUILD_CFLAGS	+= -mllvm -polly \
-		   -mllvm -polly-run-dce \
-		   -mllvm -polly-run-inliner \
-		   -mllvm -polly-isl-arg=--no-schedule-serialize-sccs \
-		   -mllvm -polly-ast-use-context \
+		   -mllvm -polly-invariant-load-hoisting \
+		   -mllvm -polly-opt-simplify-deps=yes \
+		   -mllvm -polly-pattern-matching-based-opts=true \
+		   -mllvm -polly-tiling=true \
+		   -mllvm -polly-register-tiling=true \
+		   -mllvm -polly-enable-delicm=true \
+		   -mllvm -polly-enable-simplify=true \
 		   -mllvm -polly-vectorizer=stripmine \
-		   -mllvm -polly-invariant-load-hoisting
+		   -mllvm -polly-reschedule=1 \
+		   -mllvm -polly-stmt-granularity=scalar-indep \
+		   -mllvm -polly-postopts=1 \
+		   -mllvm -polly-dependences-computeout=0 \
+		   -mllvm -polly-isl-arg=--no-schedule-serialize-sccs
 endif
 endif
 endif
-ifdef CONFIG_LTO_CLANG
-KBUILD_CFLAG	+= -fwhole-program-vtables
 endif
 
 # Tell gcc to never replace conditional load with a non-conditional one
@@ -915,35 +926,42 @@ ifdef CONFIG_LTO_CLANG
 ifdef CONFIG_THINLTO
 lto-clang-flags	:= -flto=thin -fsplit-lto-unit $(call cc-option,-funified-lto)
 
-# LLVM tunings
-KBUILD_LDFLAGS += -mllvm -inline-threshold=500
+# LLVM Tuning: Inline Threshold
+# Tuned for SM6125 Cache Density (32KB L1)
+KBUILD_LDFLAGS += -mllvm -inline-threshold=775
+
+# Optimization: Identical Code Folding & Dead Code Stripping
+KBUILD_LDFLAGS += -Wl,--icf=all
+KBUILD_LDFLAGS += -Wl,-O3
+KBUILD_LDFLAGS += -Wl,--lto-O3
+KBUILD_LDFLAGS += -mllvm -thinlto-assume-complete-module
 else
 lto-clang-flags	:= -flto
 endif
 lto-clang-flags += -fvisibility=hidden
 
 KBUILD_LDFLAGS_MODULE += -T scripts/module-lto.lds
-
 KBUILD_LDS_MODULE += $(srctree)/scripts/module-lto.lds
 
-# allow disabling only clang LTO where needed
+# Allow disabling LTO where needed
 DISABLE_LTO_CLANG := -fno-lto
 export DISABLE_LTO_CLANG
-LDFLAGS		+= --plugin-opt=-import-instr-limit=5
+
+# Import Limit: Increased for better cross-module inlining 
+LDFLAGS		+= --plugin-opt=-import-instr-limit=300
 endif
 
 ifdef CONFIG_LTO
 LTO_CFLAGS	:= $(lto-clang-flags)
 KBUILD_CFLAGS	+= $(LTO_CFLAGS)
-
 DISABLE_LTO	:= $(DISABLE_LTO_CLANG)
 export LTO_CFLAGS DISABLE_LTO
-
-# LDFINAL_vmlinux and LDFLAGS_FINAL_vmlinux can be set to override
-# the linker and flags for vmlinux_link.
 export LDFINAL_vmlinux LDFLAGS_FINAL_vmlinux
 endif
 
+# ---------------------------------------------------------------------------
+# Control Flow Integrity (CFI) & Shadow Call Stack (SCS)
+# ---------------------------------------------------------------------------
 ifdef CONFIG_CFI_CLANG
 cfi-clang-flags	+= -fsanitize=cfi -fno-sanitize-cfi-canonical-jump-tables \
 		   -fno-sanitize-blacklist
@@ -955,18 +973,13 @@ endif
 ifdef CONFIG_CFI_PERMISSIVE
 cfi-clang-flags	+= -fsanitize-recover=cfi -fno-sanitize-trap=cfi
 endif
-
-# also disable CFI when LTO is disabled
 DISABLE_LTO_CLANG += $(DISABLE_CFI_CLANG)
-# allow disabling only clang CFI where needed
 export DISABLE_CFI_CLANG
 endif
 
 ifdef CONFIG_CFI
-# cfi-flags are re-tested in prepare-compiler-check
 CFI_CFLAGS	:= $(cfi-clang-flags)
 KBUILD_CFLAGS	+= $(CFI_CFLAGS)
-
 DISABLE_CFI	:= $(DISABLE_CFI_CLANG)
 DISABLE_LTO	+= $(DISABLE_CFI)
 export CFI_CFLAGS DISABLE_CFI
@@ -978,68 +991,130 @@ KBUILD_CFLAGS	+= $(CC_FLAGS_SCS)
 export CC_FLAGS_SCS
 endif
 
-# arch Makefile may override CC so keep this after arch Makefile is included
+# ---------------------------------------------------------------------------
+# Global Compiler Tuning (GCC & Clang)
+# ---------------------------------------------------------------------------
 NOSTDINC_FLAGS += -nostdinc -isystem $(shell $(CC) -print-file-name=include)
 CHECKFLAGS     += $(NOSTDINC_FLAGS)
 
-# warn about C99 declaration after statement
+# Warning Suppressions
 KBUILD_CFLAGS += $(call cc-disable-warning,-Wdeclaration-after-statement,)
-
-# disable pointer signed / unsigned warnings in gcc 4.0
 KBUILD_CFLAGS += $(call cc-disable-warning, pointer-sign)
-
-# disable stringop warnings in gcc 8+
 KBUILD_CFLAGS += $(call cc-disable-warning, stringop-truncation)
-
-# We'll want to enable this eventually, but it's not going away for 5.7 at least
 KBUILD_CFLAGS += $(call cc-disable-warning, zero-length-bounds)
 KBUILD_CFLAGS += $(call cc-disable-warning, array-bounds)
 KBUILD_CFLAGS += $(call cc-disable-warning, stringop-overflow)
-
-# Another good warning that we'll want to enable eventually
 KBUILD_CFLAGS += $(call cc-disable-warning, restrict)
-
-# Enabled with W=2, disabled by default as noisy
 KBUILD_CFLAGS += $(call cc-disable-warning, maybe-uninitialized)
 
-# disable invalid "can't wrap" optimizations for signed / pointers
-KBUILD_CFLAGS	+= $(call cc-option,-fno-strict-overflow)
-
-# clang sets -fmerge-all-constants by default as optimization, but this
-# is non-conforming behavior for C and in fact breaks the kernel, so we
-# need to disable it here generally.
-KBUILD_CFLAGS	+= $(call cc-option,-fno-merge-all-constants)
-
-# for gcc -fno-merge-all-constants disables everything, but it is fine
-# to have actual conforming behavior enabled.
-KBUILD_CFLAGS	+= $(call cc-option,-fmerge-constants)
-
-# Make sure -fstack-check isn't enabled (like gentoo apparently did)
-KBUILD_CFLAGS  += $(call cc-option,-fno-stack-check,)
-
-# disallow errors like 'EXPORT_GPL(foo);' with missing header
-KBUILD_CFLAGS   += $(call cc-option,-Werror=implicit-int)
-
-# require functions to have arguments in prototypes, not empty 'int foo()'
-KBUILD_CFLAGS   += $(call cc-option,-Werror=strict-prototypes)
-
-# Prohibit date/time macros, which would make the build non-deterministic
-KBUILD_CFLAGS   += $(call cc-option,-Werror=date-time)
-
-# enforce correct pointer usage
-KBUILD_CFLAGS   += $(call cc-option,-Werror=incompatible-pointer-types)
-
-# Require designated initializers for all marked structures
-KBUILD_CFLAGS   += $(call cc-option,-Werror=designated-init)
-
-# Ensure compilers do not transform certain loops into calls to wcslen()
+# Safety & Standards
+KBUILD_CFLAGS += $(call cc-option,-fno-strict-overflow)
+KBUILD_CFLAGS += $(call cc-option,-fno-merge-all-constants)
+KBUILD_CFLAGS += $(call cc-option,-fmerge-constants)
+KBUILD_CFLAGS += $(call cc-option,-fno-stack-check,)
+KBUILD_CFLAGS += $(call cc-option,-Werror=implicit-int)
+KBUILD_CFLAGS += $(call cc-option,-Werror=strict-prototypes)
+KBUILD_CFLAGS += $(call cc-option,-Werror=date-time)
+KBUILD_CFLAGS += $(call cc-option,-Werror=incompatible-pointer-types)
+KBUILD_CFLAGS += $(call cc-option,-Werror=designated-init)
+KBUILD_CFLAGS += $(call cc-option,-fno-stack-clash-protection)
 KBUILD_CFLAGS += -fno-builtin-wcslen
+KBUILD_CFLAGS += -fno-builtin-bcmp
+KBUILD_CFLAGS += $(call cc-option,-fmacro-prefix-map=$(srctree)/=)
 
-# change __FILE__ to the relative path from the srctree
-KBUILD_CFLAGS	+= $(call cc-option,-fmacro-prefix-map=$(srctree)/=)
+# Unwind Tables & Function Splitting
+KBUILD_CFLAGS += -fno-unwind-tables
+KBUILD_CFLAGS += -fno-asynchronous-unwind-tables
+KBUILD_CFLAGS += $(call cc-option,-fsplit-machine-functions)
 
-# Use store motion pass for gcse
-KBUILD_CFLAGS	+= $(call cc-option,-fgcse-sm)
+# 16-Byte alignment for A73/A53 Hybrid Fetch Windows
+KBUILD_CFLAGS += -falign-functions=16
+
+# Base Loop & Vectorization flags
+KBUILD_CFLAGS += -funroll-loops -fvectorize -fslp-vectorize
+
+# Fast Math (Safe shortcuts for Kernel)
+KBUILD_CFLAGS += -fno-math-errno -fno-trapping-math
+KBUILD_CFLAGS += -freciprocal-math -fno-signed-zeros
+
+# Global Merge 
+KBUILD_CFLAGS += -mglobal-merge
+KBUILD_CFLAGS += -mllvm -global-merge-on-const
+
+# Linker Layout Optimization
+KBUILD_LDFLAGS += -mllvm -enable-ext-tsp-block-placement
+
+# ---------------------------------------------------------------------------
+# Clang 22 Specific Optimization Block
+# ---------------------------------------------------------------------------
+ifdef CONFIG_CC_IS_CLANG
+
+# 1. Pipeline & Scheduling (Latency Hiding)
+# Critical for A53 In-Order Core performance
+KBUILD_CFLAGS += $(call cc-option,-mllvm -enable-misched)
+KBUILD_CFLAGS += $(call cc-option,-mllvm -misched-limit=1000)
+KBUILD_CFLAGS += $(call cc-option,-mllvm -enable-pipeliner)
+KBUILD_CFLAGS += $(call cc-option,-mllvm -pipeliner-force-issue-width=2)
+KBUILD_CFLAGS += $(call cc-option,-mllvm -scheditineraries-use-instr-itins)
+KBUILD_CFLAGS += $(call cc-option,-mllvm -misched-post-ra-direction=topdown)
+KBUILD_CFLAGS += $(call cc-option,-mllvm -enable-aa-sched-mi)
+
+# 2. Memory Access Optimization
+# Prefetching and hoisting to prevent pipeline stalls
+KBUILD_CFLAGS += $(call cc-option,-mllvm -enable-load-pre)
+KBUILD_CFLAGS += $(call cc-option,-mllvm -enable-loop-distribute)
+KBUILD_CFLAGS += $(call cc-option,-mllvm -enable-interleaved-mem-accesses)
+KBUILD_CFLAGS += $(call cc-option,-mllvm -combiner-global-alias-analysis)
+KBUILD_CFLAGS += $(call cc-option,-mllvm -enable-ipra)
+
+# 3. Advanced Loop Transforms
+# Aggressive optimizations (Rice Flags included per instruction)
+KBUILD_CFLAGS += $(call cc-option,-mllvm -enable-unroll-and-jam)
+KBUILD_CFLAGS += $(call cc-option,-mllvm -enable-loop-flatten)
+KBUILD_CFLAGS += $(call cc-option,-mllvm -enable-constraint-elimination)
+KBUILD_CFLAGS += $(call cc-option,-mllvm -unroll-runtime)
+KBUILD_CFLAGS += $(call cc-option,-mllvm -enable-partial-inlining)
+KBUILD_CFLAGS += $(call cc-option,-mllvm -unroll-allow-partial)
+
+# 4. Vectorization Tuning
+# Forcing 128-bit NEON usage
+KBUILD_CFLAGS += $(call cc-option,-mllvm -force-vector-width=4)
+KBUILD_CFLAGS += $(call cc-option,-mllvm -enable-cond-stores-vec)
+
+# 5. Branch & Logic Elimination
+# Converting jumps to math (Jank Killing)
+KBUILD_CFLAGS += $(call cc-option,-mllvm -sink-common-insts)
+KBUILD_CFLAGS += $(call cc-option,-mllvm -enable-dfa-jump-thread)
+KBUILD_CFLAGS += $(call cc-option,-mllvm -enable-cse-in-irtranslator)
+KBUILD_CFLAGS += $(call cc-option,-mllvm -phi-node-folding-threshold=3)
+
+# 6. ARM64 Specific Tuning
+KBUILD_CFLAGS += $(call cc-option,-mllvm -aarch64-enable-ccmp)
+KBUILD_CFLAGS += $(call cc-option,-mllvm -aarch64-enable-collect-loh)
+KBUILD_CFLAGS += $(call cc-option,-mllvm -aarch64-enable-gep-opt)
+KBUILD_CFLAGS += $(call cc-option,-mllvm -aarch64-enable-ldst-opt)
+KBUILD_CFLAGS += $(call cc-option,-mllvm -aarch64-enable-atomic-cfg-tidy)
+
+# 7. Code Cleanup & Layout
+KBUILD_CFLAGS += $(call cc-option,-mllvm -enable-subreg-liveness)
+KBUILD_CFLAGS += $(call cc-option,-mllvm -enable-ext-tsp-block-placement)
+KBUILD_CFLAGS += $(call cc-option,-mllvm -enable-block-placement)
+KBUILD_CFLAGS += -mllvm -mergefunc-use-aliases
+
+# Sibling Calls (RAM Saver)
+KBUILD_CFLAGS += -foptimize-sibling-calls
+
+# No PLT / Interposition (Direct Calls)
+KBUILD_CFLAGS += -fno-plt
+KBUILD_CFLAGS += -fno-semantic-interposition
+KBUILD_CFLAGS += -mno-outline-atomics
+KBUILD_ARFLAGS := $(call ar-option,D)
+   
+# Section Layout: Helps the linker group things better.
+KBUILD_CFLAGS += -ffunction-sections -fdata-sections
+KBUILD_LDFLAGS += -Wl,--gc-sections
+
+endif
 
 # use the deterministic mode of AR if available
 KBUILD_ARFLAGS := $(call ar-option,D)
@@ -1047,6 +1122,8 @@ KBUILD_ARFLAGS := $(call ar-option,D)
 include scripts/Makefile.kasan
 include scripts/Makefile.extrawarn
 include scripts/Makefile.ubsan
+include scripts/Makefile.autofdo
+include scripts/Makefile.propeller
 
 # Add any arch overrides and user supplied CPPFLAGS, AFLAGS and CFLAGS as the
 # last assignments
