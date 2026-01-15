@@ -565,14 +565,8 @@ int ksu_install_file_wrapper(int fd)
 	// libc's stdio relies on the fstat() result of the fd to determine its buffer type.
 	wrapper_inode->i_mode = file_inode(orig_file)->i_mode;
 
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 1, 0) ||                           \
-	defined(KSU_OPTIONAL_SELINUX_INODE)
 	struct inode_security_struct *wrapper_sec =
 		selinux_inode(wrapper_inode);
-#else
-	struct inode_security_struct *wrapper_sec =
-		(struct inode_security_struct *)wrapper_inode->i_security;
-#endif
 
 	// Use ksu_file_sid to bypass SELinux check.
 	// When we call `su` from terminal app, this is useful.

@@ -197,6 +197,19 @@ config INPUT_KEYCOMBO
 	---help---
 	  Say Y here if you want to take action when some keys are pressed;
 
+config INPUT_CRASH_KEY
+	bool "Crash key combo (Power+VolDown panic trigger)"
+	depends on INPUT
+	default n
+	---help---
+	  Say Y here to enable a crash key feature that triggers a kernel
+	  panic when Power + Volume Down are held together for 5 seconds.
+	  This causes a warm reboot that preserves RAM, making last_kmsg
+	  available for debugging.
+
+	  This is useful for capturing kernel logs when the device is
+	  unresponsive or for debugging boot issues.
+
 comment "Input Device Drivers"
 
 source "drivers/input/keyboard/Kconfig"

@@ -253,11 +253,8 @@ void disable_seccomp(void)
 	put_seccomp_filter(current);
 #endif
 	current->seccomp.filter = NULL;
-// 5.9+ have filter_count, but optional.
-#if (LINUX_VERSION_CODE >= KERNEL_VERSION(6, 7, 0) ||                          \
-     defined(KSU_OPTIONAL_SECCOMP_FILTER_CNT))
+
 	atomic_set(&current->seccomp.filter_count, 0);
-#endif
     spin_unlock_irq(&current->sighand->siglock);
 
 #if (LINUX_VERSION_CODE >= KERNEL_VERSION(5, 9, 0) ||                          \

@@ -600,6 +600,7 @@ build() {
         [[ "$DO_KSU" == "1" ]] && FRAGMENTS="$FRAGMENTS ksu.config"
         [[ "$DO_SUKI" == "1" ]] && FRAGMENTS="$FRAGMENTS sukisu.config"
         [[ "$DO_RKSU" == "1" ]] && FRAGMENTS="$FRAGMENTS rksu.config"
+        [[ "$CKB_CRASHKEY" == "1" ]] && FRAGMENTS="$FRAGMENTS crash_key.config"
 
         make O=out ARCH=arm64 "$DEFCONFIG" $FRAGMENTS 2>&1 | tee log.txt
     fi

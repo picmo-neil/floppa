@@ -6,17 +6,10 @@
 #include "linux/cred.h"
 
 #include "objsec.h"
-#if defined(SAMSUNG_SELINUX_PORTING) || defined(KSU_COMPAT_HAS_SELINUX_STATE)
 #include "security.h" // Samsung SELinux Porting
-#endif
-#ifndef KSU_COMPAT_HAS_SELINUX_STATE
-#include "avc.h"
-#endif
 
-#ifdef KSU_OPTIONAL_SELINUX_CRED
-#define __selinux_cred(cred) (selinux_cred(cred))
-#else
-#define __selinux_cred(cred) (cred->security)
+#ifndef KSU_COMPAT_USE_SELINUX_STATE
+#include "avc.h"
 #endif
 
 #if LINUX_VERSION_CODE < KERNEL_VERSION(6, 18, 0)
@@ -38,25 +31,12 @@ static inline u32 current_sid(void)
 }
 #endif
 
-#if (LINUX_VERSION_CODE < KERNEL_VERSION(5, 1, 0) &&                           \
-     !defined(KSU_OPTIONAL_SELINUX_CRED))
-static inline taskcred_sec_t *selinux_cred(const struct cred *cred)
-{
-	return (taskcred_sec_t *)cred->security;
-}
-#endif
-
 // TODO: rename to "ksu"
 #define KERNEL_SU_DOMAIN "su"
 #define KERNEL_SU_FILE "ksu_file"
 
 #define KERNEL_SU_CONTEXT "u:r:" KERNEL_SU_DOMAIN ":s0"
 #define KSU_FILE_CONTEXT "u:object_r:" KERNEL_SU_FILE ":s0"
-
-#if (LINUX_VERSION_CODE >= KERNEL_VERSION(5, 10, 0)) ||                        \
-	defined(KSU_COMPAT_HAS_SELINUX_STATE)
-#define KSU_COMPAT_USE_SELINUX_STATE
-#endif
 
 void setup_selinux(const char *);
 
