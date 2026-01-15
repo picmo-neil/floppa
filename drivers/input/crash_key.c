@@ -2,7 +2,7 @@
 /*
  * Crash Key Driver - Trigger kernel panic via key combo for debug
  *
- * Hold Power + Volume Down for 5 seconds to trigger a warm reboot
+ * Hold Power button and press Volume Down 5 times to trigger a warm reboot
  * via kernel panic. This preserves RAM contents for last_kmsg.
  *
  * Copyright (C) 2026 Flopster101
@@ -14,41 +14,15 @@
 #include <linux/module.h>
 #include <linux/input.h>
 #include <linux/slab.h>
-#include <linux/timer.h>
-#include <linux/jiffies.h>
-
-#define CRASH_KEY_HOLD_MS	5000	/* 5 seconds */
 
 static bool power_pressed;
-static bool voldown_pressed;
-static struct timer_list crash_timer;
-static bool timer_active;
-
-static void crash_key_timeout(struct timer_list *t)
-{
-	/* Both keys still held after timeout - trigger panic */
-	if (power_pressed && voldown_pressed) {
-		pr_emerg("Crash key combo held for %d seconds - triggering panic!\n",
-			 CRASH_KEY_HOLD_MS / 1000);
-		panic("Crash Key");
-	}
-	timer_active = false;
-}
+static int voldown_press_count;
 
 static void crash_key_check(void)
 {
-	if (power_pressed && voldown_pressed) {
-		if (!timer_active) {
-			pr_info("Crash key combo detected, hold for %d seconds to trigger panic\n",
-				CRASH_KEY_HOLD_MS / 1000);
-			mod_timer(&crash_timer, jiffies + msecs_to_jiffies(CRASH_KEY_HOLD_MS));
-			timer_active = true;
-		}
-	} else {
-		if (timer_active) {
-			del_timer(&crash_timer);
-			timer_active = false;
-		}
+	if (power_pressed && voldown_press_count >= 5) {
+		pr_emerg("Crash key combo completed - triggering panic!\n");
+		panic("Crash Key");
 	}
 }
 
@@ -61,9 +35,17 @@ static void crash_key_event(struct input_handle *handle, unsigned int type,
 	switch (code) {
 	case KEY_POWER:
 		power_pressed = !!value;
+		if (!power_pressed) {
+			/* Power released - reset count */
+			voldown_press_count = 0;
+		}
 		break;
 	case KEY_VOLUMEDOWN:
-		voldown_pressed = !!value;
+		if (value == 1 && power_pressed) {
+			/* VolDown pressed while Power held */
+			voldown_press_count++;
+			pr_info("Crash key: VolDown press %d/5\n", voldown_press_count);
+		}
 		break;
 	default:
 		return;
@@ -133,22 +115,18 @@ static int __init crash_key_init(void)
 {
 	int ret;
 
-	timer_setup(&crash_timer, crash_key_timeout, 0);
-
 	ret = input_register_handler(&crash_key_handler);
 	if (ret) {
 		pr_err("Failed to register input handler: %d\n", ret);
 		return ret;
 	}
 
-	pr_info("Crash key driver loaded (Power+VolDown for %d seconds)\n",
-		CRASH_KEY_HOLD_MS / 1000);
+	pr_info("Crash key driver loaded (hold Power, press VolDown 5 times)\n");
 	return 0;
 }
 
 static void __exit crash_key_exit(void)
 {
-	del_timer_sync(&crash_timer);
 	input_unregister_handler(&crash_key_handler);
 	pr_info("Crash key driver unloaded\n");
 }
