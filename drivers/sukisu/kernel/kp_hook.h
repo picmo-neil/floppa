@@ -3,13 +3,12 @@
 
 // ksud.c
 enum ksud_stop_code {
-	VFS_READ_HOOK_KP = 0,
+	INIT_RC_HOOK_KP = 0,
 	EXECVE_HOOK_KP,
 	INPUT_EVENT_HOOK_KP,
 };
 
-int ksu_handle_sys_read(unsigned int fd, char __user **buf_ptr,
-			size_t *count_ptr);
+void ksu_handle_sys_read(unsigned int fd);
 
 int ksu_handle_input_handle_event(unsigned int *type, unsigned int *code,
 				  int *value);
