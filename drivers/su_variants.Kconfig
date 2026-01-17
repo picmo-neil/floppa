@@ -52,35 +52,11 @@ endchoice
 
 # SukiSU Ultra specific options
 config KSU_MULTI_MANAGER_SUPPORT
-    bool "Multi KernelSU manager support"
-    depends on KSU_SUKI
-    default n
-    help
-	    Enable multi KernelSU manager support.
-
-config KSU_THRONE_TRACKER_LEGACY
-	bool "Use legacy throne tracker (packages.list scanning)"
+	bool "Multi KernelSU manager support"
 	depends on KSU_SUKI
 	default n
 	help
-	  Use legacy throne tracker that scans packages.list for app UIDs.
-	  This is kept for Ultra-Legacy Linux 4.4-3.X kernels which are prone to deadlocks.
-	  Enable this if default scanning deadlocks/crashes on you.
-
-config KSU_MANUAL_SU
-	bool "Use manual su"
-	depends on KSU_SUKI
-	default y
-	help
-	  Use manual su and authorize the corresponding command line and application via prctl.
-
-config KSU_CMDLINE
-	bool "Enable KernelSU cmdline"
-	depends on KSU_SUKI && KSU != m
-	default n
-	help
-	  Enable a cmdline called kernelsu.enabled
-	  Value 1 means enabled, value 0 means disabled.
+		Enable multi KernelSU manager support
 
 config KPM
 	bool "Enable SukiSU KPM"

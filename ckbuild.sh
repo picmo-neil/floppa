@@ -139,7 +139,7 @@ fi
 ## Customizable vars
 
 # FloppyKernel version
-FK_VER="v1.2"
+FK_VER="v2.0b"
 
 # Toggles
 USE_CCACHE=1
@@ -252,8 +252,8 @@ if [[ "$DO_KSU" == "1" ]]; then
     CK_TYPE="KSUNext-NOSUS"
     CK_TYPE_SHORT="KN"
 elif [ "$DO_SUKI" == "1" ]; then
-    CK_TYPE="SukiSU-Ultra"
-    CK_TYPE_SHORT="SSU"
+    CK_TYPE="SukiSU-Ultra-NOSUS"
+    CK_TYPE_SHORT="SKS"
 elif [ "$DO_RKSU" == "1" ]; then
     CK_TYPE="RKSU"
     CK_TYPE_SHORT="RKS"
