@@ -2311,6 +2311,28 @@ static inline unsigned long cpu_util_rt(int cpu)
 	return rt_rq->avg.util_avg;
 }
 
+#ifdef CONFIG_HAVE_SCHED_AVG_IRQ
+static inline unsigned long cpu_util_irq(struct rq *rq)
+{
+	return READ_ONCE(rq->avg_irq.util_avg);
+}
+#else
+static inline unsigned long cpu_util_irq(struct rq *rq)
+{
+	return 0;
+}
+#endif
+
+static inline unsigned long cpu_util_dl_rq(struct rq *rq)
+{
+	return READ_ONCE(rq->avg_dl.util_avg);
+}
+
+static inline unsigned long cpu_util_rt_rq(struct rq *rq)
+{
+	return READ_ONCE(rq->avg_rt.util_avg);
+}
+
 static inline unsigned long cpu_util(int cpu)
 {
 	struct rq *rq = cpu_rq(cpu);
@@ -3537,27 +3559,6 @@ static inline unsigned long scale_irq_capacity(unsigned long util, unsigned long
 	return util;
 }
 #undef cpu_util_irq
-#ifdef CONFIG_HAVE_SCHED_AVG_IRQ
-static inline unsigned long cpu_util_irq(struct rq *rq)
-{
-	return READ_ONCE(rq->avg_irq.util_avg);
-}
-#else
-static inline unsigned long cpu_util_irq(struct rq *rq)
-{
-	return 0;
-}
-#endif
-
-static inline unsigned long cpu_util_dl_rq(struct rq *rq)
-{
-	return READ_ONCE(rq->avg_dl.util_avg);
-}
-
-static inline unsigned long cpu_util_rt_rq(struct rq *rq)
-{
-	return READ_ONCE(rq->avg_rt.util_avg);
-}
 
 #ifndef add_positive
 #define add_positive(_ptr, _val) do { \
