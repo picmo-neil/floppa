@@ -2313,7 +2313,15 @@ static inline unsigned long cpu_util_rt(int cpu)
 
 static inline unsigned long cpu_util(int cpu)
 {
-	return min(__cpu_util(cpu) + cpu_util_rt(cpu), capacity_orig_of(cpu));
+	struct rq *rq = cpu_rq(cpu);
+	unsigned long util = __cpu_util(cpu);
+
+	/* Add Real-Time, Deadline, and IRQ utilization */
+	util += cpu_util_rt(cpu);
+	util += cpu_util_dl_rq(rq);
+	util += cpu_util_irq(rq);
+
+	return min(util, capacity_orig_of(cpu));
 }
 
 static inline unsigned long
