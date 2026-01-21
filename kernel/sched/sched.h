@@ -1,5 +1,9 @@
 /* SPDX-License-Identifier: GPL-2.0 */
 
+#ifndef _KERNEL_SCHED_SCHED_H
+#define _KERNEL_SCHED_SCHED_H
+
+
 #include <linux/sched.h>
 #include <linux/sched/autogroup.h>
 #include <linux/sched/sysctl.h>
@@ -42,6 +46,35 @@
 #include "cpudeadline.h"
 #include "cpuacct.h"
 #include "features.h"
+
+/* cap_scale macro is required by pelt.c */
+#ifndef cap_scale
+#define cap_scale(v, s) ((v) * (s) >> SCHED_CAPACITY_SHIFT)
+#endif
+
+
+
+#include "sched-pelt.h"
+
+
+#ifndef _task_util_est
+#define _task_util_est(p) (READ_ONCE((p)->se.avg.util_est.ewma))
+#endif
+
+/* Standard Constants for PELT (8ms = 11226, 16ms = 23371, 32ms = 47742) */
+#ifndef LOAD_AVG_MAX
+#define LOAD_AVG_MAX 11226 
+#endif
+
+#define PELT_MIN_DIVIDER (LOAD_AVG_MAX - 1024)
+
+
+static inline u32 get_pelt_divider(struct sched_avg *avg)
+{
+	return LOAD_AVG_MAX - 1024 + avg->period_contrib;
+}
+
+
 
 #ifdef CONFIG_SCHED_DEBUG
 # define SCHED_WARN_ON(x)	WARN_ONCE(x, #x)
@@ -539,13 +572,18 @@ struct cfs_rq {
 	 * CFS load tracking
 	 */
 	struct sched_avg avg;
-	u64 runnable_load_sum;
-	unsigned long runnable_load_avg;
 #ifdef CONFIG_FAIR_GROUP_SCHED
 	unsigned long tg_load_avg_contrib;
-	unsigned long propagate_avg;
+	long propagate;
+	long prop_runnable_sum;
 #endif
-	atomic_long_t removed_load_avg, removed_util_avg;
+	struct {
+		raw_spinlock_t	lock ____cacheline_aligned;
+		int		nr;
+		unsigned long	load_avg;
+		unsigned long	util_avg;
+		unsigned long	runnable_avg;
+	} removed;
 #ifndef CONFIG_64BIT
 	u64 load_last_update_time_copy;
 #endif
@@ -586,10 +624,21 @@ struct cfs_rq {
 	int runtime_enabled;
 	s64 runtime_remaining;
 
+	u64 throttled_pelt_idle;
+#ifndef CONFIG_64BIT
+	u64 throttled_pelt_idle_copy;
+#endif
 	u64 throttled_clock, throttled_clock_task;
 	u64 throttled_clock_task_time;
+	u64 throttled_clock_pelt;
+	u64 throttled_clock_pelt_time;
+	u64 throttled_clock_self;
+	u64 throttled_clock_self_time;
 	int throttled, throttle_count;
+	int pelt_clock_throttled;
 	struct list_head throttled_list;
+	struct list_head throttled_limbo_list;
+	struct list_head throttled_csd_list;
 #ifdef CONFIG_SCHED_WALT
 	u64 cumulative_runnable_avg;
 #endif /* CONFIG_SCHED_WALT */
@@ -880,7 +929,9 @@ struct rq {
 	struct cfs_rq cfs;
 	struct rt_rq rt;
 	struct dl_rq dl;
-
+    struct sched_avg avg_rt;
+    struct sched_avg avg_dl;
+    
 #ifdef CONFIG_FAIR_GROUP_SCHED
 	/* list of leaf cfs_rq on this cpu: */
 	struct list_head leaf_cfs_rq_list;
@@ -902,6 +953,17 @@ struct rq {
 	unsigned int clock_update_flags;
 	u64 clock;
 	u64 clock_task;
+	u64 clock_pelt;
+	unsigned long lost_idle_time;
+	u64 clock_pelt_idle;
+	u64 clock_idle;
+#ifndef CONFIG_64BIT
+	u64 clock_pelt_idle_copy;
+	u64 clock_idle_copy;
+#endif
+#ifdef CONFIG_HAVE_SCHED_AVG_IRQ
+	struct sched_avg avg_irq;
+#endif
 
 	atomic_t nr_iowait;
 
@@ -1028,6 +1090,8 @@ struct rq {
 #endif
 };
 
+#include "pelt.h"
+
 static inline int cpu_of(struct rq *rq)
 {
 #ifdef CONFIG_SMP
@@ -1036,7 +1100,25 @@ static inline int cpu_of(struct rq *rq)
 	return 0;
 #endif
 }
+static inline struct rq *rq_of(struct cfs_rq *cfs_rq)
+{
+	return cfs_rq->rq;
+}
 
+static inline struct task_struct *task_of(struct sched_entity *se)
+{
+	return container_of(se, struct task_struct, se);
+}
+
+static inline struct cfs_rq *cfs_rq_of(struct sched_entity *se)
+{
+	return se->cfs_rq;
+}
+
+static inline struct cfs_rq *group_cfs_rq(struct sched_entity *grp)
+{
+	return grp->my_q;
+}
 
 #ifdef CONFIG_SCHED_SMT
 extern void __update_idle_core(struct rq *rq);
@@ -2044,18 +2126,38 @@ static inline unsigned long capacity_orig_of(int cpu)
 {
 	return cpu_rq(cpu)->cpu_capacity_orig;
 }
+#else /* !CONFIG_SMP */
+static inline unsigned long capacity_of(int cpu)
+{
+	return SCHED_CAPACITY_SCALE;
+}
 
+static inline unsigned long capacity_orig_of(int cpu)
+{
+	return SCHED_CAPACITY_SCALE;
+}
+#endif /* CONFIG_SMP */
+
+#ifdef CONFIG_SMP
 extern unsigned int sysctl_sched_use_walt_cpu_util;
 extern unsigned int walt_disabled;
 
 static inline unsigned long task_util(struct task_struct *p)
 {
 #ifdef CONFIG_SCHED_WALT
-	if (likely(!walt_disabled && sysctl_sched_use_walt_task_util))
+	if (likely(!walt_disabled && sysctl_sched_use_walt_cpu_util))
 		return p->ravg.demand_scaled;
 #endif
 	return READ_ONCE(p->se.avg.util_avg);
 }
+#else /* !CONFIG_SMP */
+static inline unsigned long task_util(struct task_struct *p)
+{
+	return 0;
+}
+#endif /* CONFIG_SMP */
+
+#ifdef CONFIG_SMP
 
 /**
  * Amount of capacity of a CPU that is (estimated to be) used by CFS tasks
@@ -2442,7 +2544,9 @@ static inline void double_rq_unlock(struct rq *rq1, struct rq *rq2)
 #endif
 
 extern struct sched_entity *__pick_first_entity(struct cfs_rq *cfs_rq);
+#ifdef CONFIG_SCHED_DEBUG
 extern struct sched_entity *__pick_last_entity(struct cfs_rq *cfs_rq);
+#endif
 
 #ifdef	CONFIG_SCHED_DEBUG
 extern bool sched_debug_enabled;
@@ -3298,3 +3402,198 @@ struct sched_avg_stats {
 	int nr_max;
 };
 extern void sched_get_nr_running_avg(struct sched_avg_stats *stats);
+
+/* ---------------- PELT SUPPORT MACROS ---------------- */
+
+#ifdef CONFIG_64BIT
+# define u64_u32_load_copy(var, copy)		var
+# define u64_u32_store_copy(var, copy, val)	(var = val)
+#else
+# define u64_u32_load_copy(var, copy)					\
+({									\
+	u64 __val, __val_copy;						\
+	do {								\
+		__val_copy = copy;					\
+		smp_rmb();						\
+		__val = var;						\
+	} while (__val != __val_copy);					\
+	__val;								\
+})
+# define u64_u32_store_copy(var, copy, val)				\
+do {									\
+	typeof(val) __val = (val);					\
+	var = __val;							\
+	smp_wmb();							\
+	copy = __val;							\
+} while (0)
+#endif
+# define u64_u32_load(var)		u64_u32_load_copy(var, var##_copy)
+# define u64_u32_store(var, val)	u64_u32_store_copy(var, var##_copy, val)
+
+/* ---------------- PELT CLOCK HELPERS ---------------- */
+
+static inline u64 rq_clock_pelt(struct rq *rq)
+{
+	lockdep_assert_held(&rq->lock);
+	return rq->clock_pelt - rq->lost_idle_time;
+}
+
+/* The rq is idle, we can sync to clock_task */
+static inline void _update_idle_rq_clock_pelt(struct rq *rq)
+{
+	rq->clock_pelt  = rq_clock_task(rq);
+
+	u64_u32_store(rq->clock_idle, rq_clock(rq));
+	/* Paired with smp_rmb in migrate_se_pelt_lag() */
+	smp_wmb();
+	u64_u32_store(rq->clock_pelt_idle, rq_clock_pelt(rq));
+}
+
+static inline void update_rq_clock_pelt(struct rq *rq, s64 delta)
+{
+	if (unlikely(is_idle_task(rq->curr))) {
+		_update_idle_rq_clock_pelt(rq);
+		return;
+	}
+
+	/*
+	 * Scale the elapsed time to reflect the real amount of
+	 * computation
+	 */
+	delta = cap_scale(delta, arch_scale_cpu_capacity(NULL, cpu_of(rq)));
+	delta = cap_scale(delta, arch_scale_freq_capacity(NULL, cpu_of(rq)));
+
+	rq->clock_pelt += delta;
+}
+
+static inline void update_idle_rq_clock_pelt(struct rq *rq)
+{
+	u32 divider = ((LOAD_AVG_MAX - 1024) << SCHED_CAPACITY_SHIFT) - LOAD_AVG_MAX;
+	u32 util_sum = rq->cfs.avg.util_sum;
+	util_sum += rq->avg_rt.util_sum;
+	util_sum += rq->avg_dl.util_sum;
+
+	if (util_sum >= divider)
+		rq->lost_idle_time += rq_clock_task(rq) - rq->clock_pelt;
+
+	_update_idle_rq_clock_pelt(rq);
+}
+
+extern void init_sched_avg(struct sched_avg *sa);
+
+#ifdef CONFIG_HAVE_SCHED_AVG_IRQ
+extern int update_irq_load_avg(struct rq *rq, u64 running);
+#else
+static inline int update_irq_load_avg(struct rq *rq, u64 running) { return 0; }
+#endif
+
+#ifdef CONFIG_CFS_BANDWIDTH
+static inline void update_idle_cfs_rq_clock_pelt(struct cfs_rq *cfs_rq)
+{
+	u64 throttled;
+
+	if (unlikely(cfs_rq->pelt_clock_throttled))
+		throttled = U64_MAX;
+	else
+		throttled = cfs_rq->throttled_clock_pelt_time;
+
+	u64_u32_store(cfs_rq->throttled_pelt_idle, throttled);
+}
+
+/* rq->task_clock normalized against any time this cfs_rq has spent throttled */
+static inline u64 cfs_rq_clock_pelt(struct cfs_rq *cfs_rq)
+{
+	if (unlikely(cfs_rq->pelt_clock_throttled))
+		return cfs_rq->throttled_clock_pelt - cfs_rq->throttled_clock_pelt_time;
+
+	return rq_clock_pelt(rq_of(cfs_rq)) - cfs_rq->throttled_clock_pelt_time;
+}
+#else /* !CONFIG_CFS_BANDWIDTH */
+static inline void update_idle_cfs_rq_clock_pelt(struct cfs_rq *cfs_rq) { }
+static inline u64 cfs_rq_clock_pelt(struct cfs_rq *cfs_rq)
+{
+	return rq_clock_pelt(rq_of(cfs_rq));
+}
+#endif /* CONFIG_CFS_BANDWIDTH */
+unsigned long cpu_util_cfs(int cpu);
+unsigned long cpu_util_cfs_boost(int cpu);
+extern unsigned long effective_cpu_util(int cpu, unsigned long util_cfs,
+                                        unsigned long *pmin, 
+                                        unsigned long *pmax);
+                                        
+                                   
+static inline unsigned long scale_irq_capacity(unsigned long util, unsigned long irq, unsigned long max_cap)
+{
+	util *= (max_cap - irq);
+	util /= max_cap;
+	return util;
+}
+#undef cpu_util_irq
+#ifdef CONFIG_HAVE_SCHED_AVG_IRQ
+static inline unsigned long cpu_util_irq(struct rq *rq)
+{
+	return READ_ONCE(rq->avg_irq.util_avg);
+}
+#else
+static inline unsigned long cpu_util_irq(struct rq *rq)
+{
+	return 0;
+}
+#endif
+
+static inline unsigned long cpu_util_dl_rq(struct rq *rq)
+{
+	return READ_ONCE(rq->avg_dl.util_avg);
+}
+
+static inline unsigned long cpu_util_rt_rq(struct rq *rq)
+{
+	return READ_ONCE(rq->avg_rt.util_avg);
+}
+
+#ifndef add_positive
+#define add_positive(_ptr, _val) do { \
+    *(_ptr) += (_val); \
+} while (0)
+#endif
+
+#ifndef sub_positive
+#define sub_positive(_ptr, _val) do { \
+    typeof(_ptr) __ptr = (_ptr); \
+    typeof(*__ptr) __val = (_val); \
+    *__ptr = (*__ptr > __val) ? *__ptr - __val : 0; \
+} while (0)
+#endif
+
+#ifdef CONFIG_UCLAMP_TASK
+static inline unsigned int uclamp_rq_get(struct rq *rq, enum uclamp_id clamp_id)
+{
+	return rq->uclamp[clamp_id].value;
+}
+#else
+static inline unsigned int uclamp_rq_get(struct rq *rq, enum uclamp_id clamp_id)
+{
+	if (clamp_id == UCLAMP_MIN)
+		return 0;
+	return SCHED_CAPACITY_SCALE;
+}
+#endif
+
+static inline unsigned long task_util_est(struct task_struct *p)
+{
+	return max(task_util(p), (unsigned long)_task_util_est(p));
+}
+
+static inline void util_est_enqueue(struct cfs_rq *cfs_rq, struct task_struct *p)
+{
+	unsigned int enqueued;
+
+	if (!sched_feat(UTIL_EST))
+		return;
+
+	enqueued = cfs_rq->avg.util_est.enqueued;
+	enqueued += (_task_util_est(p) | UTIL_AVG_UNCHANGED);
+	WRITE_ONCE(cfs_rq->avg.util_est.enqueued, enqueued);
+}
+
+#endif /* _KERNEL_SCHED_SCHED_H */

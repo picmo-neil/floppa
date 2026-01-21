@@ -41,6 +41,7 @@
 #endif
 
 #include "sched.h"
+#include "pelt.h"
 #include "walt.h"
 #include "../workqueue_internal.h"
 #include "../smpboot.h"
@@ -201,9 +202,12 @@ static void update_rq_clock_task(struct rq *rq, s64 delta)
 	rq->clock_task += delta;
 
 #if defined(CONFIG_IRQ_TIME_ACCOUNTING) || defined(CONFIG_PARAVIRT_TIME_ACCOUNTING)
-	if ((irq_delta + steal) && sched_feat(NONTASK_CAPACITY))
-		sched_rt_avg_update(rq, irq_delta + steal);
+	if (irq_delta + steal)
+    update_irq_load_avg(rq, irq_delta + steal);
+    
 #endif
+
+	update_rq_clock_pelt(rq, delta);
 }
 
 void update_rq_clock(struct rq *rq)
@@ -3189,6 +3193,8 @@ static void __sched_fork(unsigned long clone_flags, struct task_struct *p)
 	p->se.sum_exec_runtime		= 0;
 	p->se.prev_sum_exec_runtime	= 0;
 	p->se.nr_migrations		= 0;
+	p->se.avg.util_est.enqueued = 0;
+	p->se.avg.util_est.ewma = 0;
 	p->se.vruntime			= 0;
 	p->last_sleep_ts		= 0;
 	p->boost                = 0;
@@ -7588,6 +7594,15 @@ void __init sched_init(void)
 		init_cfs_rq(&rq->cfs);
 		init_rt_rq(&rq->rt);
 		init_dl_rq(&rq->dl);
+		init_sched_avg(&rq->avg_rt);
+        init_sched_avg(&rq->avg_dl);
+        memset(&rq->avg_rt, 0, sizeof(rq->avg_rt));
+        memset(&rq->avg_dl, 0, sizeof(rq->avg_dl));
+#ifdef CONFIG_HAVE_SCHED_AVG_IRQ
+        init_sched_avg(&rq->avg_irq);
+        memset(&rq->avg_irq, 0, sizeof(rq->avg_irq));
+#endif
+        
 #ifdef CONFIG_FAIR_GROUP_SCHED
 		root_task_group.shares = ROOT_TASK_GROUP_LOAD;
 		INIT_LIST_HEAD(&rq->leaf_cfs_rq_list);
@@ -7632,6 +7647,16 @@ void __init sched_init(void)
 		rq->next_balance = jiffies;
 		rq->push_cpu = 0;
 		rq->cpu = i;
+		/* PELT Init */
+		rq->clock_pelt = 0;
+		rq->clock_idle = 0;
+		rq->clock_pelt_idle = 0;
+		rq->lost_idle_time = 0;
+#ifdef CONFIG_HAVE_SCHED_AVG_IRQ
+		rq->avg_irq.util_avg = 0;
+		rq->avg_irq.load_avg = 0;
+		rq->avg_irq.last_update_time = 0;
+#endif
 		rq->online = 0;
 		rq->idle_stamp = 0;
 		rq->avg_idle = 2*sysctl_sched_migration_cost;
