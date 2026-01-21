@@ -41,6 +41,9 @@
 #include "pelt.h"
 #include "walt.h"
 
+#undef UTIL_EST_WEIGHT_SHIFT
+#define UTIL_EST_WEIGHT_SHIFT 5
+
 
 static inline u64 cfs_rq_last_update_time(struct cfs_rq *cfs_rq)
 {
