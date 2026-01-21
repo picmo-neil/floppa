@@ -183,26 +183,20 @@ unsigned long effective_cpu_util(int cpu, unsigned long util_cfs,
 
 	capacity = capacity_orig_of(cpu);
 
-	/* * 1. INTEGRATED IRQ PRESSURE */
+	/* INTEGRATED IRQ PRESSURE */
 	irq = cpu_util_irq(rq);
 
-	/* 2. BASE UTILIZATION 
+	/* BASE UTILIZATION 
 	 * Combine CFS (normal), RT, and DL (deadline) tasks.
 	 */
 	util = util_cfs;
-	util += cpu_util_rt_rq(rq); /* UPDATED NAME */
-	util += cpu_util_dl_rq(rq); /* UPDATED NAME */
+	util += cpu_util_rt_rq(rq); 
+	util += cpu_util_dl_rq(rq); 
 
-	/* * 3. NON-LINEAR SCALING */
-	if (util > (capacity >> 2)) {      /* If util > 25% */
-		util += (util >> 3);
-		/* Add a 12.5% 'momentum' bonus */
-	}
-
-	/* 4. IRQ COMPENSATION */
+	/* IRQ COMPENSATION */
 	util = (util * capacity) / max(1UL, capacity - irq);
 
-	/* 5. UCLAMP SUPPORT */
+	/* UCLAMP SUPPORT */
 	if (pmin) *pmin = uclamp_rq_get(rq, UCLAMP_MIN);
 	if (pmax) *pmax = uclamp_rq_get(rq, UCLAMP_MAX);
 
