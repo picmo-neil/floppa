@@ -10,6 +10,7 @@
 #include <linux/tracepoint.h>
 #include <linux/binfmts.h>
 #include <linux/sched/idle.h>
+#include "walt.h"
 
 /*
  * Tracepoint for calling kthread_stop, performed to end a kthread:
@@ -951,11 +952,12 @@ extern unsigned int sysctl_sched_use_walt_task_util;
 extern unsigned int sched_ravg_window;
 extern unsigned int walt_disabled;
 
-#define walt_util(util_var, demand_sum) {\
-	u64 sum = demand_sum << SCHED_CAPACITY_SHIFT;\
-	do_div(sum, sched_ravg_window);\
-	util_var = (typeof(util_var))sum;\
-	}
+#define walt_util(util_var, demand_sum) do { \
+    u64 sum = demand_sum << SCHED_CAPACITY_SHIFT;\
+    do_div(sum, sched_ravg_window);\
+    util_var = (typeof(util_var))sum;\
+} while (0)
+
 #endif
 
 /*
@@ -1650,7 +1652,7 @@ TRACE_EVENT(sched_isolate,
 		__entry->time, __entry->isolate)
 );
 
-#include "walt.h"
+
 
 #endif /* CONFIG_SMP */
 

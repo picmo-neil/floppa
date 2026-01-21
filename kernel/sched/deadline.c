@@ -1387,6 +1387,7 @@ static void enqueue_task_dl(struct rq *rq, struct task_struct *p, int flags)
 {
 	struct task_struct *pi_task = rt_mutex_get_top_task(p);
 	struct sched_dl_entity *pi_se = &p->dl;
+	update_dl_rq_load_avg(rq_clock(rq), rq, 1);
 
 	/*
 	 * Use the scheduling parameters of the top pi-waiter task if:
@@ -1458,6 +1459,7 @@ static void __dequeue_task_dl(struct rq *rq, struct task_struct *p, int flags)
 static void dequeue_task_dl(struct rq *rq, struct task_struct *p, int flags)
 {
 	update_curr_dl(rq);
+	update_dl_rq_load_avg(rq_clock(rq), rq, 0);
 	__dequeue_task_dl(rq, p, flags);
 
 	if (p->on_rq == TASK_ON_RQ_MIGRATING || flags & DEQUEUE_SAVE) {
@@ -2370,7 +2372,7 @@ int sched_dl_global_validate(void)
 	 * cycling on root_domains... Discussion on different/better
 	 * solutions is welcome!
 	 */
-	for_each_possible_cpu(cpu) {
+	for_each_online_cpu(cpu) {
 		rcu_read_lock_sched();
 		dl_b = dl_bw_of(cpu);
 		cpus = dl_bw_cpus(cpu);

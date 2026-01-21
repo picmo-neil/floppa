@@ -405,11 +405,6 @@ struct load_weight {
  * estimated utilization. This allows to absorb sporadic drops in utilization
  * of an otherwise almost periodic task.
  */
-struct util_est {
-	unsigned int			enqueued;
-	unsigned int			ewma;
-#define UTIL_EST_WEIGHT_SHIFT		2
-} __attribute__((__aligned__(sizeof(u64))));
 
 /*
  * The load_avg/util_avg accumulates an infinite geometric series
@@ -463,15 +458,43 @@ struct util_est {
  * Then it is the load_weight's responsibility to consider overflow
  * issues.
  */
+/**
+ * struct util_est - Estimation utilization of FAIR tasks
+ * @enqueued: instantaneous estimated utilization of a task/cpu
+ * @ewma:     the Exponential Weighted Moving Average (EWMA)
+ *            utilization of a task
+ */
+
+
+
+struct util_est {
+	unsigned int			enqueued;
+	unsigned int			ewma;
+#define UTIL_EST_WEIGHT_SHIFT		2
+} __attribute__((__aligned__(sizeof(u64))));
+
+/*
+ * The UTIL_AVG_UNCHANGED flag is used to synchronize util_est with util_avg
+ * updates. When a task is dequeued, its util_est should not be updated if its
+ * util_avg has not been updated in the meantime.
+ * This information is mapped into the MSB bit of util_est at dequeue time.
+ * Since max value of util_est for a task is 1024 (PELT util_avg for a task)
+ * it is safe to use MSB.
+ */
+#define UTIL_AVG_UNCHANGED		0x80000000
+
 struct sched_avg {
 	u64				last_update_time;
 	u64				load_sum;
+	u64				runnable_sum;
 	u32				util_sum;
 	u32				period_contrib;
 	unsigned long			load_avg;
+	unsigned long			runnable_avg;
 	unsigned long			util_avg;
 	struct util_est			util_est;
 } ____cacheline_aligned;
+
 
 struct sched_statistics {
 #ifdef CONFIG_SCHEDSTATS
