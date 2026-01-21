@@ -6,7 +6,7 @@
 #include <linux/mi_detect.h>
 
 bool is_legacy_timestamp(void);
-bool is_bpf_spoof_enabled(void);
+int is_bpf_spoof_enabled(void);
 bool always_warm_reboot(void);
 bool msm_perf_disabled(void);
 bool is_using_legacy_ir_hal(void);

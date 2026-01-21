@@ -600,7 +600,11 @@ build() {
         [[ "$DO_KSU" == "1" ]] && FRAGMENTS="$FRAGMENTS ksu.config"
         [[ "$DO_SUKI" == "1" ]] && FRAGMENTS="$FRAGMENTS sukisu.config"
         [[ "$DO_RKSU" == "1" ]] && FRAGMENTS="$FRAGMENTS rksu.config"
-        [[ "$CKB_CRASHKEY" == "1" ]] && FRAGMENTS="$FRAGMENTS crash_key.config"
+        if [[ "$CKB_CRASHKEY" == "1" ]]; then
+            FRAGMENTS="$FRAGMENTS crash_key.config"
+            # Append CrashKey to the ZIP name so these builds are identifiable
+            ZIP_PATH="${ZIP_PATH%.zip}-CrashKey.zip"
+        fi
 
         make O=out ARCH=arm64 "$DEFCONFIG" $FRAGMENTS 2>&1 | tee log.txt
     fi
@@ -623,11 +627,22 @@ build() {
         exit 0
     fi
 
+    # Disallow Release builds when CrashKey testing is enabled
+    if [[ "$CKB_CRASHKEY" == "1" && "$IS_RELEASE" == "1" ]]; then
+        echo "ERROR: CrashKey builds cannot be Release builds"
+        exit 1
+    fi
+
     if [[ "$IS_RELEASE" == "1" ]]; then
         VERSION_STR="\"-Floppy-$FK_VER-$CK_TYPE_SHORT-release\""
         VERSION_NOAUTO=1
     else
         VERSION_STR="\"-Floppy-$FK_VER-$CK_TYPE_SHORT\""
+    fi
+
+    if [[ "$CKB_CRASHKEY" == "1" ]]; then
+        # Append CrashKey to the LOCALVERSION string
+        VERSION_STR="${VERSION_STR%\"}-CrashKey\""
     fi
 
     scripts/config --file "$KDIR/out/.config" --set-val LOCALVERSION "$VERSION_STR"
