@@ -6448,10 +6448,13 @@ schedtune_margin(unsigned long signal, long boost, long capacity)
 	 * The obtained M could be used by the caller to "boost" S.
 	 */
 	if (boost >= 0) {
-		if (capacity > signal) {
-			margin  = capacity - signal;
-			margin *= boost;
-		}
+		/* 
+		 * Signal-Proportional Boosting.
+		 * Instead of boosting idle space (which spikes freq on small tasks),
+		 * we boost the actual workload. 
+		 * Note: Division by 100 happens at the end of this function via schedtune_spc_rdiv.
+		 */
+		margin = (long long)signal * boost;
 	} else
 		margin = -signal * boost;
 
