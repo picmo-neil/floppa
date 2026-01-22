@@ -89,15 +89,19 @@ ___update_load_sum(u64 now, struct sched_avg *sa,
 		return 0;
 	}
 
-	delta >>= 10;
+	/* 
+	 * Update timestamp to 'now' immediately.
+	 * This prevents time drift caused by discarding nanoseconds.
+	 */
+	sa->last_update_time = now;
+
 	if (!delta)
 		return 0;
-
-	sa->last_update_time += delta << 10;
 
 	if (!load)
 		runnable = running = 0;
 
+	/* Pass raw delta (ns) to accumulate_sum */
 	if (!accumulate_sum(delta, sa, load, runnable, running))
 		return 0;
 
@@ -168,8 +172,16 @@ int update_dl_rq_load_avg(u64 now, struct rq *rq, int running)
 int update_irq_load_avg(struct rq *rq, u64 running)
 {
 	int ret = 0;
-	if (running > rq->clock)
-        running = 0;
+		/* 
+	 * Compare 'running' (duration) against the time 
+	 * elapsed since the last update, NOT the absolute clock time.
+	 */
+
+	u64 delta = rq->clock - rq->avg_irq.last_update_time;
+	
+	if (running > delta)
+		running = delta;
+
 	ret = ___update_load_sum(rq->clock - running, &rq->avg_irq, 0, 0, 0);
 	ret += ___update_load_sum(rq->clock, &rq->avg_irq, 1, 1, 1);
 	if (ret)
