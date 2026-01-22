@@ -49,6 +49,9 @@
 #define CREATE_TRACE_POINTS
 #include <trace/events/sched.h>
 
+DEFINE_PER_CPU(unsigned long, ac_freq_scale) = SCHED_CAPACITY_SCALE;
+EXPORT_PER_CPU_SYMBOL(ac_freq_scale);
+
 DEFINE_PER_CPU_SHARED_ALIGNED(struct rq, runqueues);
 
 /*

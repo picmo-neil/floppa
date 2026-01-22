@@ -2089,11 +2089,13 @@ static inline u64 sched_ktime_clock(void)
 extern void sched_avg_update(struct rq *rq);
 extern unsigned long sched_get_rt_rq_util(int cpu);
 
+DECLARE_PER_CPU(unsigned long, ac_freq_scale);
+
 #ifndef arch_scale_freq_capacity
 static __always_inline
 unsigned long arch_scale_freq_capacity(struct sched_domain *sd, int cpu)
 {
-	return SCHED_CAPACITY_SCALE;
+	return per_cpu(ac_freq_scale, cpu);
 }
 #endif
 
@@ -2834,13 +2836,9 @@ walt_task_in_cum_window_demand(struct rq *rq, struct task_struct *p)
 
 #endif /* CONFIG_SCHED_WALT */
 
-#ifdef arch_scale_freq_capacity
-#ifndef arch_scale_freq_invariant
+
+#undef arch_scale_freq_invariant
 #define arch_scale_freq_invariant()	(true)
-#endif
-#else /* arch_scale_freq_capacity */
-#define arch_scale_freq_invariant()	(false)
-#endif
 
 enum sched_boost_policy {
 	SCHED_BOOST_NONE,
