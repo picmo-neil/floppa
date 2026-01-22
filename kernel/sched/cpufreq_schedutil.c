@@ -22,6 +22,16 @@
 
 #define SUGOV_KTHREAD_PRIORITY	50
 
+static void sugov_update_freq_scale(int cpu, unsigned int next_freq,
+				    unsigned int max_freq)
+{
+	unsigned long scale;
+
+	scale = (unsigned long)next_freq << SCHED_CAPACITY_SHIFT;
+	scale /= max_freq;
+	per_cpu(ac_freq_scale, cpu) = scale;
+}
+
 struct sugov_tunables {
 	struct gov_attr_set attr_set;
 	unsigned int		up_rate_limit_us;
@@ -184,9 +194,13 @@ static void sugov_update_commit(struct sugov_policy *sg_policy, u64 time,
 
 		policy->cur = next_freq;
 		for_each_cpu(cpu, policy->cpus) {
+		    sugov_update_freq_scale(cpu, next_freq, policy->cpuinfo.max_freq);ll
 			trace_cpu_frequency(next_freq, cpu);
 		}
 	} else {
+	    for_each_cpu(cpu, policy->cpus) {
+			sugov_update_freq_scale(cpu, next_freq, policy->cpuinfo.max_freq);
+		}
 		if (use_pelt())
 			sg_policy->work_in_progress = true;
 		irq_work_queue(&sg_policy->irq_work);
