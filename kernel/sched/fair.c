@@ -12965,7 +12965,7 @@ unsigned long cpu_util_cfs_boost(int cpu)
 /* Map cpu_util_cfs to cpu_util */
 unsigned long cpu_util_cfs(int cpu)
 {
-	return cpu_util(cpu);
+	return __cpu_util(cpu);
 }
 
 /* Helper for effective_cpu_util */
