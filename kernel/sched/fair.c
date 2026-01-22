@@ -44,6 +44,8 @@
 #undef UTIL_EST_WEIGHT_SHIFT
 #define UTIL_EST_WEIGHT_SHIFT 3
 
+extern unsigned int sysctl_sched_init_task_load_pct;
+
 
 static inline u64 cfs_rq_last_update_time(struct cfs_rq *cfs_rq)
 {
@@ -881,7 +883,8 @@ void post_init_entity_util_avg(struct sched_entity *se)
 	struct cfs_rq *cfs_rq = cfs_rq_of(se);
 	struct sched_avg *sa = &se->avg;
 	long cpu_scale = arch_scale_cpu_capacity(NULL, cpu_of(rq_of(cfs_rq)));
-	long cap = (long)(cpu_scale - cfs_rq->avg.util_avg) / 2;
+	long cap = (long)(cpu_scale - cfs_rq->avg.util_avg) * sysctl_sched_init_task_load_pct;
+cap = div_u64(cap, 100);
 
 	if (cap > 0) {
 		if (cfs_rq->avg.util_avg != 0) {
