@@ -802,7 +802,17 @@ static int sugov_init(struct cpufreq_policy *policy)
 
 	policy->governor_data = sg_policy;
 	sg_policy->tunables = tunables;
-	stale_ns = sched_ravg_window + (sched_ravg_window >> 3);
+	#ifdef CONFIG_SCHED_WALT
+	if (!walt_disabled && sysctl_sched_use_walt_cpu_util) {
+		/* WALT Mode: Use window size + margin */
+		stale_ns = sched_ravg_window + (sched_ravg_window >> 3);
+	} else {
+		/* PELT Mode: Use ~100ms (approx 3-4 PELT half-lives) */
+		stale_ns = TICK_NSEC * 100;
+	}
+#else
+	stale_ns = TICK_NSEC * 100;
+#endif
 
 	sugov_tunables_restore(policy);
 
