@@ -98,7 +98,7 @@
  * UtilEstimation. Use estimated CPU utilization.
  */
 #define SCHED_FEAT_UTIL_EST 1
-#define SCHED_FEAT_UTIL_EST_FASTUP 1
+#define SCHED_FEAT_UTIL_EST_FASTUP 0
 
 /*
  * Energy aware scheduling. Use platform energy model to guide scheduling
