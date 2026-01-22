@@ -2150,63 +2150,66 @@ static inline unsigned long task_util(struct task_struct *p)
 #endif
 	return READ_ONCE(p->se.avg.util_avg);
 }
-#else /* !CONFIG_SMP */
-static inline unsigned long task_util(struct task_struct *p)
+
+/* --------------------------------------------------------- */
+/* PELT Helpers - Defined BEFORE usage to fix implicit decls */
+/* --------------------------------------------------------- */
+
+static inline unsigned long cpu_util_rt(int cpu)
+{
+	struct rt_rq *rt_rq = &(cpu_rq(cpu)->rt);
+	return rt_rq->avg.util_avg;
+}
+
+#ifdef CONFIG_HAVE_SCHED_AVG_IRQ
+static inline unsigned long cpu_util_irq(struct rq *rq)
+{
+	return READ_ONCE(rq->avg_irq.util_avg);
+}
+#else
+static inline unsigned long cpu_util_irq(struct rq *rq)
 {
 	return 0;
 }
-#endif /* CONFIG_SMP */
+#endif
 
-#ifdef CONFIG_SMP
+static inline unsigned long cpu_util_dl_rq(struct rq *rq)
+{
+	return READ_ONCE(rq->avg_dl.util_avg);
+}
+
+static inline unsigned long cpu_util_rt_rq(struct rq *rq)
+{
+	return READ_ONCE(rq->avg_rt.util_avg);
+}
 
 /**
  * Amount of capacity of a CPU that is (estimated to be) used by CFS tasks
  * @cpu: the CPU to get the utilization of
  *
- * The unit of the return value must be the one of capacity so we can compare
- * the utilization with the capacity of the CPU that is available for CFS task
- * (ie cpu_capacity).
- *
- * cfs_rq.avg.util_avg is the sum of running time of runnable tasks plus the
- * recent utilization of currently non-runnable tasks on a CPU. It represents
- * the amount of utilization of a CPU in the range [0..capacity_orig] where
- * capacity_orig is the cpu_capacity available at the highest frequency
- * (arch_scale_freq_capacity()).
- * The utilization of a CPU converges towards a sum equal to or less than the
- * current capacity (capacity_curr <= capacity_orig) of the CPU because it is
- * the running time on this CPU scaled by capacity_curr.
- *
- * The estimated utilization of a CPU is defined to be the maximum between its
- * cfs_rq.avg.util_avg and the sum of the estimated utilization of the tasks
- * currently RUNNABLE on that CPU.
- * This allows to properly represent the expected utilization of a CPU which
- * has just got a big task running since a long sleep period. At the same time
- * however it preserves the benefits of the "blocked utilization" in
- * describing the potential for other tasks waking up on the same CPU.
- *
- * Nevertheless, cfs_rq.avg.util_avg can be higher than capacity_curr or even
- * higher than capacity_orig because of unfortunate rounding in
- * cfs.avg.util_avg or just after migrating tasks and new task wakeups until
- * the average stabilizes with the new running time. We need to check that the
- * utilization stays within the range of [0..capacity_orig] and cap it if
- * necessary. Without utilization capping, a group could be seen as overloaded
- * (CPU0 utilization at 121% + CPU1 utilization at 80%) whereas CPU1 has 20% of
- * available capacity. We allow utilization to overshoot capacity_curr (but not
- * capacity_orig) as it useful for predicting the capacity required after task
- * migrations (scheduler-driven DVFS).
- *
  * Return: the (estimated) utilization for the specified CPU
  */
-
-#ifdef CONFIG_SCHED_WALT
-static inline unsigned long cpu_util(int cpu)
-#else
 static inline unsigned long __cpu_util(int cpu)
-#endif
 {
 	struct cfs_rq *cfs_rq;
 	unsigned int util;
 
+	cfs_rq = &cpu_rq(cpu)->cfs;
+	util = READ_ONCE(cfs_rq->avg.util_avg);
+
+	if (sched_feat(UTIL_EST))
+		util = max(util, READ_ONCE(cfs_rq->avg.util_est.enqueued));
+
+	return min_t(unsigned long, util, capacity_orig_of(cpu));
+}
+
+/*
+ * cpu_util - The main utilization function.
+ * If WALT is enabled, it returns WALT util.
+ * If WALT is disabled (PELT), it returns __cpu_util + RT + DL + IRQ.
+ */
+static inline unsigned long cpu_util(int cpu)
+{
 #ifdef CONFIG_SCHED_WALT
 	if (!walt_disabled && sysctl_sched_use_walt_cpu_util) {
 		u64 walt_cpu_util =
@@ -2216,26 +2219,14 @@ static inline unsigned long __cpu_util(int cpu)
 				capacity_orig_of(cpu));
 	}
 #endif
-
-	cfs_rq = &cpu_rq(cpu)->cfs;
-	util = READ_ONCE(cfs_rq->avg.util_avg);
-
-	if (sched_feat(UTIL_EST))
-		util = max(util, READ_ONCE(cfs_rq->avg.util_est.enqueued));
-
-	return min_t(unsigned long, util, capacity_orig_of(cpu));
-	cfs_rq = &cpu_rq(cpu)->cfs;
-	util = READ_ONCE(cfs_rq->avg.util_avg);
-
-	if (sched_feat(UTIL_EST))
-		util = max(util, READ_ONCE(cfs_rq->avg.util_est.enqueued));
-
-	/* Account for RT, DL, and IRQ pressure */
-	util += cpu_util_rt(cpu);
-	util += cpu_util_dl_rq(cpu_rq(cpu));
-	util += cpu_util_irq(cpu_rq(cpu));
-
-	return min_t(unsigned long, util, capacity_orig_of(cpu));
+	/* PELT Path: Add pressure signals */
+	return min(
+		__cpu_util(cpu) + 
+		cpu_util_rt(cpu) + 
+		cpu_util_dl_rq(cpu_rq(cpu)) + 
+		cpu_util_irq(cpu_rq(cpu)),
+		capacity_orig_of(cpu)
+	);
 }
 
 struct sched_walt_cpu_load {
@@ -2250,11 +2241,7 @@ static inline unsigned long cpu_util_cum(int cpu, int delta)
 	unsigned long capacity = capacity_orig_of(cpu);
 	u64 util;
 
-#ifdef CONFIG_SCHED_WALT
 	util = cpu_util(cpu);
-#else
-	util = __cpu_util(cpu);
-#endif
 
 	delta += util;
 	if (delta < 0)
@@ -2262,7 +2249,6 @@ static inline unsigned long cpu_util_cum(int cpu, int delta)
 
 	return (delta >= capacity) ? capacity : delta;
 }
-
 
 #ifdef CONFIG_SCHED_WALT
 u64 freq_policy_load(struct rq *rq);
@@ -2307,68 +2293,46 @@ cpu_util_freq_walt(int cpu, struct sched_walt_cpu_load *walt_load)
 
 	return (util >= capacity) ? capacity : util;
 }
+#else /* !CONFIG_SCHED_WALT */
 
-static inline unsigned long
-cpu_util_freq(int cpu, struct sched_walt_cpu_load *walt_load)
-{
-	return cpu_util_freq_walt(cpu, walt_load);
-}
-
-#else
-
-static inline unsigned long cpu_util_rt(int cpu)
-{
-	struct rt_rq *rt_rq = &(cpu_rq(cpu)->rt);
-
-	return rt_rq->avg.util_avg;
-}
-
-#ifdef CONFIG_HAVE_SCHED_AVG_IRQ
-static inline unsigned long cpu_util_irq(struct rq *rq)
-{
-	return READ_ONCE(rq->avg_irq.util_avg);
-}
-#else
-static inline unsigned long cpu_util_irq(struct rq *rq)
-{
-	return 0;
-}
-#endif
-
-static inline unsigned long cpu_util_dl_rq(struct rq *rq)
-{
-	return READ_ONCE(rq->avg_dl.util_avg);
-}
-
-static inline unsigned long cpu_util_rt_rq(struct rq *rq)
-{
-	return READ_ONCE(rq->avg_rt.util_avg);
-}
-
-static inline unsigned long cpu_util(int cpu)
-{
-	struct rq *rq = cpu_rq(cpu);
-	unsigned long util = __cpu_util(cpu);
-
-	/* Add Real-Time, Deadline, and IRQ utilization */
-	util += cpu_util_rt(cpu);
-	util += cpu_util_dl_rq(rq);
-	util += cpu_util_irq(rq);
-
-	return min(util, capacity_orig_of(cpu));
-}
-
-static inline unsigned long
-cpu_util_freq(int cpu, struct sched_walt_cpu_load *walt_load)
-{
-	return min(cpu_util(cpu), capacity_orig_of(cpu));
-}
-
-
+/* 
+ * RESTORED MISSING LOGIC:
+ * These defines are required when WALT is disabled to prevent errors.
+ */
 #define sched_ravg_window TICK_NSEC
 #define sysctl_sched_use_walt_cpu_util 0
 
 #endif /* CONFIG_SCHED_WALT */
+
+static inline unsigned long
+cpu_util_freq(int cpu, struct sched_walt_cpu_load *walt_load)
+{
+#ifdef CONFIG_SCHED_WALT
+	if (!walt_disabled && sysctl_sched_use_walt_cpu_util)
+		return cpu_util_freq_walt(cpu, walt_load);
+#endif
+	return cpu_util(cpu);
+}
+
+#else /* !CONFIG_SMP */
+
+static inline unsigned long task_util(struct task_struct *p)
+{
+	return 0;
+}
+
+static inline unsigned long cpu_util(int cpu)
+{
+	return 0;
+}
+
+static inline unsigned long
+cpu_util_freq(int cpu, struct sched_walt_cpu_load *walt_load)
+{
+	return 0;
+}
+
+#endif /* CONFIG_SMP */
 
 extern unsigned long
 boosted_cpu_util(int cpu, struct sched_walt_cpu_load *walt_load);
@@ -2384,7 +2348,6 @@ add_capacity_margin(unsigned long cpu_capacity, int cpu)
 	return cpu_capacity;
 }
 
-#endif /* CONFIG_SMP */
 
 static inline void sched_rt_avg_update(struct rq *rq, u64 rt_delta)
 {
