@@ -168,6 +168,8 @@ int update_dl_rq_load_avg(u64 now, struct rq *rq, int running)
 int update_irq_load_avg(struct rq *rq, u64 running)
 {
 	int ret = 0;
+	if (running > rq->clock)
+        running = 0;
 	ret = ___update_load_sum(rq->clock - running, &rq->avg_irq, 0, 0, 0);
 	ret += ___update_load_sum(rq->clock, &rq->avg_irq, 1, 1, 1);
 	if (ret)
