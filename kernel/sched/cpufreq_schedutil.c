@@ -277,7 +277,7 @@ static void sugov_set_iowait_boost(struct sugov_cpu *sg_cpu, u64 time,
 		sg_cpu->iowait_boost_pending = true;
 
 		if (sg_cpu->iowait_boost) {
-			sg_cpu->iowait_boost <<= 1;
+			sg_cpu->iowait_boost += (sg_cpu->iowait_boost_max >> 2);
 			if (sg_cpu->iowait_boost > sg_cpu->iowait_boost_max)
 				sg_cpu->iowait_boost = sg_cpu->iowait_boost_max;
 		} else {
