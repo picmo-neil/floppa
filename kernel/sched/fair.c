@@ -9378,6 +9378,10 @@ static void update_blocked_averages(int cpu)
 			update_load_avg(cfs_rq_of(se), se, 0);
 	}
 	update_rt_rq_load_avg(rq_clock_task(rq), rq, 0);
+	update_dl_rq_load_avg(rq_clock_task(rq), rq, 0);
+#ifdef CONFIG_HAVE_SCHED_AVG_IRQ
+	update_irq_load_avg(rq, 0);
+#endif
 #ifdef CONFIG_NO_HZ_COMMON
 	rq->last_blocked_load_update_tick = jiffies;
 #endif
