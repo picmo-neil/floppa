@@ -194,7 +194,7 @@ static void sugov_update_commit(struct sugov_policy *sg_policy, u64 time,
 
 		policy->cur = next_freq;
 		for_each_cpu(cpu, policy->cpus) {
-		    sugov_update_freq_scale(cpu, next_freq, policy->cpuinfo.max_freq);ll
+		    sugov_update_freq_scale(cpu, next_freq, policy->cpuinfo.max_freq);
 			trace_cpu_frequency(next_freq, cpu);
 		}
 	} else {
