@@ -4084,6 +4084,9 @@ void scheduler_tick(void)
 	early_notif = early_detection_notify(rq, wallclock);
 	if (early_notif)
 		flag = SCHED_CPUFREQ_WALT | SCHED_CPUFREQ_EARLY_DET;
+		
+	if (flag || (!walt_disabled && sysctl_sched_use_walt_cpu_util))
+        cpufreq_update_util(rq, flag);
 
 	cpufreq_update_util(rq, flag);
 	rq_unlock(rq, &rf);
