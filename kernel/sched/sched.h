@@ -2224,6 +2224,18 @@ static inline unsigned long __cpu_util(int cpu)
 		util = max(util, READ_ONCE(cfs_rq->avg.util_est.enqueued));
 
 	return min_t(unsigned long, util, capacity_orig_of(cpu));
+	cfs_rq = &cpu_rq(cpu)->cfs;
+	util = READ_ONCE(cfs_rq->avg.util_avg);
+
+	if (sched_feat(UTIL_EST))
+		util = max(util, READ_ONCE(cfs_rq->avg.util_est.enqueued));
+
+	/* Account for RT, DL, and IRQ pressure */
+	util += cpu_util_rt(cpu);
+	util += cpu_util_dl_rq(cpu_rq(cpu));
+	util += cpu_util_irq(cpu_rq(cpu));
+
+	return min_t(unsigned long, util, capacity_orig_of(cpu));
 }
 
 struct sched_walt_cpu_load {
@@ -2702,15 +2714,22 @@ DECLARE_PER_CPU(struct update_util_data *, cpufreq_update_util_data);
  * but that really is a band-aid.  Going forward it should be replaced with
  * solutions targeted more specifically at RT and DL tasks.
  */
+/* sched.h */
 static inline void cpufreq_update_util(struct rq *rq, unsigned int flags)
 {
 	struct update_util_data *data;
 	u64 clock;
 
 #ifdef CONFIG_SCHED_WALT
+	/* Allow pass-through if WALT is disabled */
 	if (!(flags & SCHED_CPUFREQ_WALT) && !walt_disabled)
 		return;
-	clock = sched_ktime_clock();
+	
+	/* Use rq_clock for PELT consistency when WALT is disabled */
+	if (walt_disabled)
+		clock = rq_clock(rq);
+	else
+		clock = sched_ktime_clock();
 #else
 	clock = rq_clock(rq);
 #endif
