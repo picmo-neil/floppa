@@ -3492,7 +3492,7 @@ util_est_dequeue(struct cfs_rq *cfs_rq, struct task_struct *p, bool task_sleep)
 		}
 	}
 
-	/*
+    /*
 	 * Skip update of task's estimated utilization when its EWMA is
 	 * already ~1% close to its last activation value.
 	 */
@@ -3501,29 +3501,25 @@ util_est_dequeue(struct cfs_rq *cfs_rq, struct task_struct *p, bool task_sleep)
 		return;
 
 	/*
-	 * Update Task's estimated utilization
+	 * 
+	 * Scenario A: Task is shrinking (last_ewma_diff < 0).
+	 * We use a faster decay (>> 1, approx 50% bleed) to remove ghost load
+	 * quickly and save battery, but we do NOT drop instantly to prevent
+	 * frame drops (lag) in interactive apps.
 	 *
-	 * When *p completes an activation we can consolidate another sample
-	 * of the task size. This is done by storing the current PELT value
-	 * as ue.enqueued and by using this value to update the Exponential
-	 * Weighted Moving Average (EWMA):
-	 *
-	 *  ewma(t) = w *  task_util(p) + (1-w) * ewma(t-1)
-	 *          = w *  task_util(p) +         ewma(t-1)  - w * ewma(t-1)
-	 *          = w * (task_util(p) -         ewma(t-1)) +     ewma(t-1)
-	 *          = w * (      last_ewma_diff            ) +     ewma(t-1)
-	 *          = w * (last_ewma_diff  +  ewma(t-1) / w)
-	 *
-	 * Where 'w' is the weight of new samples, which is configured to be
-	 * 0.25, thus making w=1/4 ( >>= UTIL_EST_WEIGHT_SHIFT)
+	 * Scenario B: Task is growing.
+	 * We use the standard smoothing (>> UTIL_EST_WEIGHT_SHIFT) to prevent
+	 * premature frequency spikes.
 	 */
-	ue.ewma <<= UTIL_EST_WEIGHT_SHIFT;
-	ue.ewma  += last_ewma_diff;
-	ue.ewma >>= UTIL_EST_WEIGHT_SHIFT;
-done:
-	WRITE_ONCE(p->se.avg.util_est, ue);
-
-	trace_sched_util_est_task(p, &p->se.avg);
+	if (last_ewma_diff < 0) {
+		/* Fast Decay: Bleed 50% of the difference immediately */
+		ue.ewma += (last_ewma_diff >> 1);
+	} else {
+		/* Standard Growth: Smooth ramp-up */
+		ue.ewma <<= UTIL_EST_WEIGHT_SHIFT;
+		ue.ewma  += last_ewma_diff;
+		ue.ewma >>= UTIL_EST_WEIGHT_SHIFT;
+	}
 }
 
 #else /* CONFIG_SMP */
