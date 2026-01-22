@@ -3520,6 +3520,10 @@ util_est_dequeue(struct cfs_rq *cfs_rq, struct task_struct *p, bool task_sleep)
 		ue.ewma  += last_ewma_diff;
 		ue.ewma >>= UTIL_EST_WEIGHT_SHIFT;
 	}
+	done:
+	WRITE_ONCE(p->se.avg.util_est, ue);
+
+	trace_sched_util_est_task(p, &p->se.avg);
 }
 
 #else /* CONFIG_SMP */
@@ -6511,11 +6515,13 @@ schedtune_task_margin(struct task_struct *task)
 unsigned long
 boosted_cpu_util(int cpu, struct sched_walt_cpu_load *walt_load)
 {
+	unsigned long util = cpu_util_freq(cpu, walt_load);
 	long margin = schedtune_cpu_margin(util, cpu);
 
 	trace_sched_boost_cpu(cpu, util, margin);
 
 	/* 
+	 * Non-Additive Boosting
 	 * Prevent stacking boost on top of high load.
 	 * If margin is positive, ensure we don't exceed capacity blindly.
 	 */
@@ -6527,7 +6533,6 @@ boosted_cpu_util(int cpu, struct sched_walt_cpu_load *walt_load)
 
 	return util;
 }
-
 static inline unsigned long
 boosted_task_util(struct task_struct *task)
 {
