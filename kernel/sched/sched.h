@@ -2223,8 +2223,7 @@ static inline unsigned long cpu_util(int cpu)
 	return min(
 		__cpu_util(cpu) + 
 		cpu_util_rt(cpu) + 
-		cpu_util_dl_rq(cpu_rq(cpu)) + 
-		cpu_util_irq(cpu_rq(cpu)),
+		cpu_util_dl_rq(cpu_rq(cpu)),
 		capacity_orig_of(cpu)
 	);
 }
