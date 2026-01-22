@@ -44,7 +44,7 @@
 #undef UTIL_EST_WEIGHT_SHIFT
 #define UTIL_EST_WEIGHT_SHIFT 3
 
-extern unsigned int sysctl_sched_init_task_load_pct;
+unsigned int __read_mostly sysctl_sched_init_task_load_pct = 15;
 
 
 static inline u64 cfs_rq_last_update_time(struct cfs_rq *cfs_rq)
