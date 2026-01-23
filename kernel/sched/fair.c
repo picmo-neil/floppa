@@ -5071,9 +5071,6 @@ static void dequeue_task_fair(struct rq *rq, struct task_struct *p, int flags)
 	struct cfs_rq *cfs_rq;
 	struct sched_entity *se = &p->se;
 	int task_sleep = flags & DEQUEUE_SLEEP;
-	
-	util_est_dequeue(&rq->cfs, p, task_sleep);
-	util_est_update(&rq->cfs, p, task_sleep);
 
 	/*
 	 * The code below (indirectly) updates schedutil which looks at
@@ -5129,7 +5126,8 @@ static void dequeue_task_fair(struct rq *rq, struct task_struct *p, int flags)
 		sub_nr_running(rq, 1);
 		dec_rq_walt_stats(rq, p);
 	}
-
+    util_est_dequeue(&rq->cfs, p, task_sleep);
+	util_est_update(&rq->cfs, p, task_sleep);
 	hrtick_update(rq);
 }
 
