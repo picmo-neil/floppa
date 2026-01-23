@@ -2159,22 +2159,19 @@ static inline unsigned long task_util(struct task_struct *p)
 
 static inline unsigned long cpu_util_rt(int cpu)
 {
-	struct rt_rq *rt_rq = &(cpu_rq(cpu)->rt);
-	return rt_rq->avg.util_avg;
+	return READ_ONCE(cpu_rq(cpu)->avg_rt.util_avg);
 }
 
 #ifdef CONFIG_HAVE_SCHED_AVG_IRQ
 static inline unsigned long cpu_util_irq(struct rq *rq)
 {
+#if defined(CONFIG_IRQ_TIME_ACCOUNTING) || defined(CONFIG_PARAVIRT_TIME_ACCOUNTING)
 	return READ_ONCE(rq->avg_irq.util_avg);
-}
 #else
-static inline unsigned long cpu_util_irq(struct rq *rq)
-{
 	return 0;
+#endif
 }
 #endif
-
 static inline unsigned long cpu_util_dl_rq(struct rq *rq)
 {
 	return READ_ONCE(rq->avg_dl.util_avg);
