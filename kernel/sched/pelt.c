@@ -76,7 +76,7 @@ accumulate_sum(u64 delta, struct sched_avg *sa,
 	if (load)
 		sa->load_sum += load * contrib;
 	if (runnable)
-		sa->runnable_sum += runnable * contrib << SCHED_CAPACITY_SHIFT; /
+    sa->runnable_sum += runnable * contrib; 
 	if (running)
 		sa->util_sum += contrib * scale_cpu; // Scale by CPU capacity
 
