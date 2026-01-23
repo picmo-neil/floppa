@@ -304,8 +304,8 @@ schedtune_tasks_update(struct task_struct *p, int cpu, int idx, int task_count)
 			bg->group[idx].ts = now;
 
 		/* Boost group activation or deactivation on that RQ */
-		if (bg->group[idx].tasks == 1)
-			schedtune_cpu_update(cpu, now);
+		if (bg->group[idx].tasks == 1 || (task_count < 0 && bg->group[idx].tasks == 0))
+    schedtune_cpu_update(cpu, now);
 	}
 
 	trace_sched_tune_tasks_update(p, cpu, tasks, idx,
