@@ -546,6 +546,17 @@ struct sched_entity {
 
 	u64				nr_migrations;
 
+	/* EEVDF */
+	u64				slice;
+	u64				deadline;
+	u64				min_vruntime;
+	u64				min_slice;
+	s64				vlag;
+	u64				vprot;
+	unsigned int			rel_deadline:1;
+	unsigned int			custom_slice:1;
+	unsigned int			sched_delayed:1;
+
 	struct sched_statistics		statistics;
 
 #ifdef CONFIG_FAIR_GROUP_SCHED

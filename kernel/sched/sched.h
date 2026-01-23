@@ -549,12 +549,18 @@ struct cfs_rq {
 	struct load_weight load;
 	unsigned long runnable_weight;
 	unsigned int nr_running, h_nr_running;
+	unsigned int h_nr_runnable;
+	unsigned int h_nr_idle;
 
 	u64 exec_clock;
 	u64 min_vruntime;
 #ifndef CONFIG_64BIT
 	u64 min_vruntime_copy;
 #endif
+
+	s64 avg_vruntime;
+	u64 avg_load;
+	u64 zero_vruntime;
 
 	struct rb_root_cached tasks_timeline;
 
@@ -930,6 +936,7 @@ struct rq {
 	struct cfs_rq cfs;
 	struct rt_rq rt;
 	struct dl_rq dl;
+	struct sched_dl_entity fair_server;
     struct sched_avg avg_rt;
     struct sched_avg avg_dl;
     
