@@ -3424,20 +3424,21 @@ static inline bool task_fits_capacity(struct task_struct *p, long capacity,
 
 static inline void update_misfit_status(struct task_struct *p, struct rq *rq)
 {
-	if (!static_branch_unlikely(&sched_asym_cpucapacity))
-		return;
+    if (!static_branch_unlikely(&sched_asym_cpucapacity))
+        return;
 
-	if (!p) {
-		rq->misfit_task_load = 0;
-		return;
-	}
+    if (!p) {
+        rq->misfit_task_load = 0;
+        return;
+    }
 
-	if (task_fits_max(p, cpu_of(rq))) {
-		rq->misfit_task_load = 0;
-		return;
-	}
+    /* FIX: Use raw capacity check to avoid migrating small boosted tasks */
+    if (task_fits_capacity_raw(p, cpu_of(rq))) {
+        rq->misfit_task_load = 0;
+        return;
+    }
 
-	rq->misfit_task_load = task_h_load(p);
+    rq->misfit_task_load = task_h_load(p);
 }
 
 
@@ -7120,6 +7121,22 @@ static inline bool task_fits_max(struct task_struct *p, int cpu)
 		return false;
 
 	return task_fits_capacity(p, capacity, cpu);
+}
+
+/*
+ * Check if task fits capacity without considering boost.
+ * Used for misfit detection to prevent unnecessary active migration.
+ */
+static inline bool task_fits_capacity_raw(struct task_struct *p, int cpu)
+{
+    unsigned long capacity = capacity_orig_of(cpu);
+    unsigned long max_capacity = cpu_rq(cpu)->rd->max_cpu_capacity.val;
+
+    if (capacity == max_capacity)
+        return true;
+
+    /* Use raw task_util() instead of boosted_task_util() */
+    return task_fits_capacity(p, capacity, cpu);
 }
 
 struct find_best_target_env {
