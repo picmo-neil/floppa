@@ -3493,12 +3493,6 @@ static inline void update_idle_rq_clock_pelt(struct rq *rq)
 
 extern void init_sched_avg(struct sched_avg *sa);
 
-#ifdef CONFIG_HAVE_SCHED_AVG_IRQ
-extern int update_irq_load_avg(struct rq *rq, u64 running);
-#else
-static inline int update_irq_load_avg(struct rq *rq, u64 running) { return 0; }
-#endif
-
 #ifdef CONFIG_CFS_BANDWIDTH
 static inline void update_idle_cfs_rq_clock_pelt(struct cfs_rq *cfs_rq)
 {
