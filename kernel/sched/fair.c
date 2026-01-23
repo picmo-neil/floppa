@@ -144,6 +144,7 @@ enum sched_tunable_scaling sysctl_sched_tunable_scaling = SCHED_TUNABLESCALING_L
  *
  * (default: 0.75 msec * (1 + ilog(ncpus)), units: nanoseconds)
  */
+unsigned int 
 sysctl_sched_min_granularity		= 4000000ULL;  // 4ms
 unsigned int normalized_sysctl_sched_min_granularity	= 4000000ULL;
 
@@ -3421,6 +3422,22 @@ static int idle_balance(struct rq *this_rq, struct rq_flags *rf);
 
 static inline bool task_fits_capacity(struct task_struct *p, long capacity,
 								int cpu);
+								
+/*
+ * Check if task fits capacity without considering boost.
+ * Used for misfit detection to prevent unnecessary active migration.
+ */
+static inline bool task_fits_capacity_raw(struct task_struct *p, int cpu)
+{
+    unsigned long capacity = capacity_orig_of(cpu);
+    unsigned long max_capacity = cpu_rq(cpu)->rd->max_cpu_capacity.val;
+
+    if (capacity == max_capacity)
+        return true;
+
+    /* Use raw task_util() instead of boosted_task_util() */
+    return task_fits_capacity(p, capacity, cpu);
+}								
 
 static inline void update_misfit_status(struct task_struct *p, struct rq *rq)
 {
@@ -7123,22 +7140,6 @@ static inline bool task_fits_max(struct task_struct *p, int cpu)
 	return task_fits_capacity(p, capacity, cpu);
 }
 
-/*
- * Check if task fits capacity without considering boost.
- * Used for misfit detection to prevent unnecessary active migration.
- */
-static inline bool task_fits_capacity_raw(struct task_struct *p, int cpu)
-{
-    unsigned long capacity = capacity_orig_of(cpu);
-    unsigned long max_capacity = cpu_rq(cpu)->rd->max_cpu_capacity.val;
-
-    if (capacity == max_capacity)
-        return true;
-
-    /* Use raw task_util() instead of boosted_task_util() */
-    return task_fits_capacity(p, capacity, cpu);
-}
-
 struct find_best_target_env {
 	struct cpumask *rtg_target;
 	int placement_boost;
@@ -9395,7 +9396,7 @@ static void update_blocked_averages(int cpu)
 		if (throttled_hierarchy(cfs_rq))
 			continue;
 
-		if (update_cfs_rq_load_avg(cfs_rq))
+		if (update_cfs_rq_load_avg(cfs_rq_clock_task(cfs_rq), cfs_rq))
 			update_tg_load_avg(cfs_rq);
 
 		/* Propagate pending load changes to the parent, if any: */
