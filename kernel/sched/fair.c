@@ -51,11 +51,13 @@ static inline u64 cfs_rq_last_update_time(struct cfs_rq *cfs_rq)
 {
 	return cfs_rq->avg.last_update_time;
 }
-
-static inline void sync_entity_load_avg(struct sched_entity *se)
+void sync_entity_load_avg(struct sched_entity *se)
 {
 	struct cfs_rq *cfs_rq = cfs_rq_of(se);
-	se->avg.last_update_time = cfs_rq->avg.last_update_time;
+	u64 last_update_time;
+
+	last_update_time = cfs_rq_last_update_time(cfs_rq);
+	__update_load_avg_blocked_se(last_update_time, cpu_of(rq_of(cfs_rq)), se);
 }
 
 static inline bool skip_blocked_update(struct sched_entity *se)
@@ -3094,9 +3096,8 @@ static inline void add_tg_cfs_propagate(struct cfs_rq *cfs_rq, long runnable_sum
 }
 
 static inline int
-update_cfs_rq_load_avg(struct cfs_rq *cfs_rq)
+update_cfs_rq_load_avg(u64 now, struct cfs_rq *cfs_rq)
 {
-	u64 now = cfs_rq_clock_task(cfs_rq); 
 	struct sched_avg *sa = &cfs_rq->avg;
 	int decayed = 0;
 
@@ -3130,7 +3131,8 @@ update_cfs_rq_load_avg(struct cfs_rq *cfs_rq)
 		decayed = 1;
 	}
 
-	decayed |= __update_load_avg_cfs_rq(now, cfs_rq);
+
+	decayed |= __update_load_avg_cfs_rq(now, cpu_of(rq_of(cfs_rq)), cfs_rq);
 
 #ifndef CONFIG_64BIT
 	smp_wmb();
@@ -3175,10 +3177,10 @@ void set_task_rq_fair(struct sched_entity *se,
 	p_last_update_time = cfs_rq_last_update_time(prev);
 	n_last_update_time = cfs_rq_last_update_time(next);
 
-	__update_load_avg_blocked_se(p_last_update_time, se);
+	__update_load_avg_blocked_se(p_last_update_time, cpu_of(rq_of(prev)), se);
+	
 	se->avg.last_update_time = n_last_update_time;
 }
-
 static inline void
 update_tg_cfs_util(struct cfs_rq *cfs_rq, struct sched_entity *se, struct cfs_rq *gcfs_rq)
 {
@@ -3382,12 +3384,15 @@ static void remove_entity_load_avg(struct sched_entity *se)
 static inline void update_load_avg(struct cfs_rq *cfs_rq, struct sched_entity *se, int flags)
 {
 	u64 now = cfs_rq_clock_task(cfs_rq);
+	struct rq *rq = rq_of(cfs_rq);
+	int cpu = cpu_of(rq);
 	int decayed;
 
+	/* MODIFIED LINE: Pass cpu */
 	if (se->avg.last_update_time && !(flags & SKIP_AGE_LOAD))
-		__update_load_avg_se(now, cfs_rq, se);
+		__update_load_avg_se(now, cpu, cfs_rq, se);
 
-	decayed  = update_cfs_rq_load_avg(cfs_rq);
+	decayed  = update_cfs_rq_load_avg(now, cfs_rq);
 	decayed |= propagate_entity_load_avg(se);
 
 	if (!se->avg.last_update_time && (flags & DO_ATTACH)) {
@@ -3400,6 +3405,7 @@ static inline void update_load_avg(struct cfs_rq *cfs_rq, struct sched_entity *s
 		update_tg_load_avg(cfs_rq);
 	}
 }
+
 
 static inline unsigned long cfs_rq_runnable_load_avg(struct cfs_rq *cfs_rq)
 {
