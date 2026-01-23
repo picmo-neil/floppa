@@ -2171,6 +2171,11 @@ static inline unsigned long cpu_util_irq(struct rq *rq)
 	return 0;
 #endif
 }
+#else
+static inline unsigned long cpu_util_irq(struct rq *rq)
+{
+	return 0;
+}
 #endif
 static inline unsigned long cpu_util_dl_rq(struct rq *rq)
 {
