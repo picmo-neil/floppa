@@ -531,14 +531,6 @@ int schedtune_task_boost(struct task_struct *p)
 	task_boost = st->boost;
 	rcu_read_unlock();
 
-	/* 
-	 * Boost Clamping
-	 * If task is not RT, cap boost to 50% to prevent battery drain.
-	 */
-	if (task_boost > 0 && !task_has_rt_policy(p)) {
-		task_boost = min(task_boost, 50);
-	}
-
 	return task_boost;
 }
 
