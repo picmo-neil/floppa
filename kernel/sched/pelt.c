@@ -3,6 +3,10 @@
 #include "pelt.h"
 #include "sched-pelt.h"
 
+#ifndef entity_is_task
+#define entity_is_task(se)  (!se->my_q)
+#endif
+
 void cfs_se_util_change(struct sched_avg *avg)
 {
 	unsigned int enqueued;
@@ -45,11 +49,16 @@ static u32 __accumulate_pelt_segments(u64 periods, u32 d1, u32 d3)
 }
 
 static __always_inline u32
-accumulate_sum(u64 delta, struct sched_avg *sa,
-	       unsigned long load, unsigned long runnable, int running)
+accumulate_sum(u64 delta, int cpu, struct sched_avg *sa,
+           unsigned long load, unsigned long runnable, int running)
 {
-	u32 contrib = (u32)delta;
-	u64 periods;
+    unsigned long scale_freq, scale_cpu; 
+    u32 contrib = (u32)delta;
+    u64 periods;
+
+    scale_freq = arch_scale_freq_capacity(NULL, cpu);
+    scale_cpu = capacity_orig_of(cpu);                
+	
     
     scale_freq = arch_scale_freq_capacity(NULL, cpu);
 	scale_cpu = capacity_orig_of(cpu);
@@ -76,7 +85,7 @@ accumulate_sum(u64 delta, struct sched_avg *sa,
 	if (load)
 		sa->load_sum += load * contrib;
 	if (runnable)
-    sa->runnable_sum += runnable * contrib; 
+    sa->runnable_load_sum += runnable * contrib; 
 	if (running)
 		sa->util_sum += contrib * scale_cpu; // Scale by CPU capacity
 
@@ -163,12 +172,12 @@ ___update_load_sum(u64 now, int cpu, struct sched_avg *sa,
 }
 
 static __always_inline void
-___update_load_avg(struct sched_avg *sa, unsigned long load)
+___update_load_avg(struct sched_avg *sa, unsigned long load, unsigned long runnable)
 {
 	u32 divider = get_pelt_divider(sa);
 
 	sa->load_avg = div_u64(load * sa->load_sum, divider);
-	sa->runnable_avg = div_u64(sa->runnable_sum, divider);
+	sa->runnable_load_avg = div_u64(runnable * sa->runnable_load_sum, divider);
 	WRITE_ONCE(sa->util_avg, sa->util_sum / divider);
 }
 
@@ -209,7 +218,6 @@ int __update_load_avg_cfs_rq(u64 now, int cpu, struct cfs_rq *cfs_rq)
 				cfs_rq->curr != NULL)) {
 
 		___update_load_avg(&cfs_rq->avg, 1, 1);
-		return 1;
 	}
 
 	return 0;
@@ -262,7 +270,7 @@ int update_irq_load_avg(struct rq *rq, u64 running)
 	ret += ___update_load_sum(rq->clock, rq->cpu, &rq->avg_irq, 1, 1, 1);
 
 	if (ret)
-		___update_load_avg(&rq->avg_irq, 1);
+		___update_load_avg(&rq->avg_irq, 1, 1);
 	return ret;
 }
 #endif
