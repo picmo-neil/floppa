@@ -80,7 +80,7 @@ accumulate_sum(u64 delta, int cpu, struct sched_avg *sa,
 	if (load)
 		sa->load_sum += load * contrib;
 	if (runnable)
-    sa->runnable_load_sum += runnable * contrib; 
+    sa->runnable_sum += runnable * contrib; 
 	if (running)
 		sa->util_sum += contrib * scale_cpu; // Scale by CPU capacity
 
@@ -172,7 +172,7 @@ ___update_load_avg(struct sched_avg *sa, unsigned long load, unsigned long runna
 	u32 divider = get_pelt_divider(sa);
 
 	sa->load_avg = div_u64(load * sa->load_sum, divider);
-	sa->runnable_load_avg = div_u64(runnable * sa->runnable_load_sum, divider);
+	sa->runnable_avg = div_u64(runnable * sa->runnable_sum, divider);
 	WRITE_ONCE(sa->util_avg, sa->util_sum / divider);
 }
 
