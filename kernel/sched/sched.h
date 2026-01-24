@@ -3467,7 +3467,25 @@ static inline void update_rq_clock_pelt(struct rq *rq, s64 delta)
 		return;
 	}
 
-	/* PELT time must match wall clock time for correct decay */
+	/*
+	 * When a rq runs at a lower compute capacity, it will need
+	 * more time to do the same amount of work than at max
+	 * capacity. In order to be invariant, we scale the delta to
+	 * reflect how much work has been really done.
+	 * Running longer results in stealing idle time that will
+	 * disturb the load signal compared to max capacity. This
+	 * stolen idle time will be automatically reflected when the
+	 * rq will be idle and the clock will be synced with
+	 * rq_clock_task.
+	 */
+
+	/*
+	 * Scale the elapsed time to reflect the real amount of
+	 * computation
+	 */
+	delta = cap_scale(delta, arch_scale_cpu_capacity(NULL, cpu_of(rq)));
+	delta = cap_scale(delta, arch_scale_freq_capacity(NULL, cpu_of(rq)));
+
 	rq->clock_pelt += delta;
 }
 
