@@ -58,12 +58,7 @@ accumulate_sum(u64 delta, int cpu, struct sched_avg *sa,
 
     scale_freq = arch_scale_freq_capacity(NULL, cpu);
     scale_cpu = capacity_orig_of(cpu);                
-	
-    
-    scale_freq = arch_scale_freq_capacity(NULL, cpu);
-	scale_cpu = capacity_orig_of(cpu);
-	
-    
+	  
 	delta += sa->period_contrib;
 	periods = delta / 1024;
 

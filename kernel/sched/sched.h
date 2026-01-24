@@ -3469,13 +3469,7 @@ static inline void update_rq_clock_pelt(struct rq *rq, s64 delta)
 		return;
 	}
 
-	/*
-	 * Scale the elapsed time to reflect the real amount of
-	 * computation
-	 */
-	delta = cap_scale(delta, arch_scale_cpu_capacity(NULL, cpu_of(rq)));
-	delta = cap_scale(delta, arch_scale_freq_capacity(NULL, cpu_of(rq)));
-
+	/* PELT time must match wall clock time for correct decay */
 	rq->clock_pelt += delta;
 }
 
