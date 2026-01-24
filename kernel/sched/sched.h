@@ -955,7 +955,6 @@ struct rq {
 	u64 clock;
 	u64 clock_task;
 	u64 clock_pelt;
-	unsigned long lost_idle_time;
 	u64 clock_pelt_idle;
 	u64 clock_idle;
 #ifndef CONFIG_64BIT
@@ -3448,7 +3447,7 @@ do {									\
 static inline u64 rq_clock_pelt(struct rq *rq)
 {
 	lockdep_assert_held(&rq->lock);
-	return rq->clock_pelt - rq->lost_idle_time;
+	return rq->clock_pelt;
 }
 
 /* The rq is idle, we can sync to clock_task */
@@ -3475,17 +3474,8 @@ static inline void update_rq_clock_pelt(struct rq *rq, s64 delta)
 
 static inline void update_idle_rq_clock_pelt(struct rq *rq)
 {
-	u32 divider = ((LOAD_AVG_MAX - 1024) << SCHED_CAPACITY_SHIFT) - LOAD_AVG_MAX;
-	u32 util_sum = rq->cfs.avg.util_sum;
-	util_sum += rq->avg_rt.util_sum;
-	util_sum += rq->avg_dl.util_sum;
-
-	if (util_sum >= divider)
-		rq->lost_idle_time += rq_clock_task(rq) - rq->clock_pelt;
-
 	_update_idle_rq_clock_pelt(rq);
 }
-
 extern void init_sched_avg(struct sched_avg *sa);
 
 #ifdef CONFIG_CFS_BANDWIDTH

@@ -7656,7 +7656,6 @@ void __init sched_init(void)
 		rq->clock_pelt = 0;
 		rq->clock_idle = 0;
 		rq->clock_pelt_idle = 0;
-		rq->lost_idle_time = 0;
 #ifdef CONFIG_HAVE_SCHED_AVG_IRQ
 		rq->avg_irq.util_avg = 0;
 		rq->avg_irq.load_avg = 0;
