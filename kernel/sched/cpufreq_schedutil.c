@@ -251,7 +251,7 @@ static void sugov_get_util(unsigned long *util, unsigned long *max, int cpu,
 {
 	struct sugov_cpu *loadcpu = &per_cpu(sugov_cpu, cpu);
 
-	*max = arch_scale_cpu_capacity(NULL, cpu);
+	*max = capacity_orig_of(cpu);
 
 	/*
 	 * WALT/PELT abstraction:

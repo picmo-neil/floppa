@@ -9626,7 +9626,7 @@ static void update_cpu_capacity(struct sched_domain *sd, int cpu)
 	capacity >>= SCHED_CAPACITY_SHIFT;
 
 	if (!capacity)
-		capacity = 1;
+		capacity = SCHED_CAPACITY_SCALE;
 
 	cpu_rq(cpu)->cpu_capacity = capacity;
 	sdg->sgc->capacity = capacity;
