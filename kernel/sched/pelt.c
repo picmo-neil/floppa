@@ -57,6 +57,7 @@ accumulate_sum(u64 delta, int cpu, struct sched_avg *sa,
 	u64 periods;
 
 	scale_cpu = arch_scale_cpu_capacity(NULL, cpu);
+	scale_cpu = (scale_cpu * arch_scale_freq_capacity(NULL, cpu)) >> SCHED_CAPACITY_SHIFT;
 
 	delta += sa->period_contrib;
 	periods = delta / 1024; /* A period is 1024us (~1ms) */
@@ -85,9 +86,18 @@ accumulate_sum(u64 delta, int cpu, struct sched_avg *sa,
 		sa->load_sum += weight * contrib;
 		if (cfs_rq)
 			cfs_rq->runnable_sum += weight * contrib;
+		} else if (periods > 0) {
+		/* 
+		 * Idle period - gradually decay load_sum to zero
+		 * This ensures that extended idle periods eventually reduce util to 0
+		 */
+		sa->load_sum = (sa->load_sum > 1) ? sa->load_sum - 1 : 0;
 	}
 	if (running)
 		sa->util_sum += contrib * scale_cpu;
+	else if (periods > 0 && sa->util_sum > 0)
+		/* Force util decay even when task not running - CRITICAL for schedutil */
+		sa->util_sum = (sa->util_sum > scale_cpu) ? sa->util_sum - scale_cpu : 0;
 
 	return periods;
 }
@@ -124,6 +134,13 @@ ___update_load_sum(u64 now, struct sched_avg *sa,
 		  unsigned long load, unsigned long runnable, int running)
 {
 	u64 delta;
+	/* Extract CPU from task structure for accumulate_sum */
+	int cpu = 0;
+#ifdef CONFIG_SMP
+	struct sched_entity *se = container_of(sa, struct sched_entity, avg);
+	if (entity_is_task(se))
+		cpu = task_cpu(task_of(se));
+#endif
 
 	delta = now - sa->last_update_time;
 	/*

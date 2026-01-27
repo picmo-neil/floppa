@@ -256,9 +256,20 @@ static void sugov_get_util(unsigned long *util, unsigned long *max, int cpu,
 	 * WALT/PELT abstraction:
 	 * If WALT is enabled, this returns WALT util.
 	 * If WALT is disabled, this calls cpu_util_freq() -> cpu_util(),
-	 * which returns the 6.19 PELT utilization (util_avg + util_est).
+	 * which returns the PELT utilization (util_avg + util_est).
 	 */
-	*util = boosted_cpu_util(cpu, &loadcpu->walt_load);
+	/*
+	 * Prevent race condition where schedutil reads util_avg
+	 * BEFORE PELT update completes.
+	 * 
+	 * Memory barrier ensures all PELT writes are visible before we read.
+	 * Without this, we may see stale utilization from previous cycle,
+	 * causing schedutil to use outdated values for frequency calculation.
+	 */
+	smp_rmb();
+	
+	/* Read directly from PELT, not cached value */
+	*util = cpu_util(cpu);
 
 #ifdef CONFIG_UCLAMP_TASK
    	*util = uclamp_util_with(cpu_rq(cpu), *util, NULL);
