@@ -49,7 +49,7 @@ static u32 __accumulate_pelt_segments(u64 periods, u32 d1, u32 d3)
 }
 
 static __always_inline u32
-accumulate_sum(u64 delta, struct sched_avg *sa,
+accumulate_sum(u64 delta, int cpu, struct sched_avg *sa,
 	       unsigned long weight, int running, struct cfs_rq *cfs_rq)
 {
 	unsigned long scale_cpu;
@@ -67,8 +67,8 @@ accumulate_sum(u64 delta, struct sched_avg *sa,
 	if (periods) {
 		sa->load_sum = decay_load(sa->load_sum, periods);
 		if (cfs_rq) {
-			cfs_rq->runnable_load_sum =
-				decay_load(cfs_rq->runnable_load_sum, periods);
+			cfs_rq->runnable_sum =
+				decay_load(cfs_rq->runnable_sum, periods);
 		}
 		sa->util_sum = decay_load((u64)(sa->util_sum), periods);
 
@@ -84,7 +84,7 @@ accumulate_sum(u64 delta, struct sched_avg *sa,
 	if (weight) {
 		sa->load_sum += weight * contrib;
 		if (cfs_rq)
-			cfs_rq->runnable_load_sum += weight * contrib;
+			cfs_rq->runnable_sum += weight * contrib;
 	}
 	if (running)
 		sa->util_sum += contrib * scale_cpu;
