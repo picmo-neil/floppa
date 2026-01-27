@@ -3404,6 +3404,12 @@ if (se->avg.last_update_time && !(flags & SKIP_AGE_LOAD))
 	} else if (decayed && (flags & UPDATE_TG)) {
 		update_tg_load_avg(cfs_rq);
 	}
+
+	/*
+	 * Ensure frequency is updated when load decays.
+	 */
+	if (decayed)
+		cfs_rq_util_change(cfs_rq, 0);
 }
 
 

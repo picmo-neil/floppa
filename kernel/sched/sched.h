@@ -2687,10 +2687,13 @@ static inline void cpufreq_update_util(struct rq *rq, unsigned int flags)
 	u64 clock;
 
 #ifdef CONFIG_SCHED_WALT
-	/* Allow pass-through if WALT is disabled */
-	if (!(flags & SCHED_CPUFREQ_WALT) && !walt_disabled)
+	/* 
+	 * Only block non-WALT updates if WALT is enabled AND 
+	 * we are explicitly configured to use WALT utilization.
+	 */
+	if (!(flags & SCHED_CPUFREQ_WALT) && !walt_disabled && sysctl_sched_use_walt_cpu_util)
 		return;
-	
+		
 	/* Use rq_clock for PELT consistency when WALT is disabled */
 	if (walt_disabled)
 		clock = rq_clock(rq);

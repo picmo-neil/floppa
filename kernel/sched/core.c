@@ -4088,9 +4088,13 @@ void scheduler_tick(void)
 	if (early_notif)
 		flag = SCHED_CPUFREQ_WALT | SCHED_CPUFREQ_EARLY_DET;
 		
-	if (flag || (!walt_disabled && sysctl_sched_use_walt_cpu_util))
+	/* 
+	 * Allow cpufreq updates if WALT is disabled OR 
+	 * if we are configured to use PELT (sysctl_sched_use_walt_cpu_util == 0).
+	 */
+	if (flag || walt_disabled || !sysctl_sched_use_walt_cpu_util)
+		cpufreq_update_util(rq, flag);
 
-	cpufreq_update_util(rq, flag);
 	rq_unlock(rq, &rf);
 
 	perf_event_task_tick();
