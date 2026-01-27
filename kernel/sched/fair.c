@@ -9386,6 +9386,7 @@ static void update_blocked_averages(int cpu)
 	struct rq *rq = cpu_rq(cpu);
 	struct cfs_rq *cfs_rq;
 	struct rq_flags rf;
+	bool decayed = false;
 
 	rq_lock_irqsave(rq, &rf);
 	update_rq_clock(rq);
@@ -9401,22 +9402,30 @@ static void update_blocked_averages(int cpu)
 		if (throttled_hierarchy(cfs_rq))
 			continue;
 
-		if (update_cfs_rq_load_avg(cfs_rq_clock_task(cfs_rq), cfs_rq))
+		if (update_cfs_rq_load_avg(cfs_rq_clock_task(cfs_rq), cfs_rq)) {
 			update_tg_load_avg(cfs_rq);
+			if (cfs_rq == &rq->cfs)
+				decayed = true;
+		}
 
 		/* Propagate pending load changes to the parent, if any: */
 		se = cfs_rq->tg->se[cpu];
 		if (se && !skip_blocked_update(se))
 			update_load_avg(cfs_rq_of(se), se, 0);
 	}
-	update_rt_rq_load_avg(rq_clock_task(rq), rq, 0);
-	update_dl_rq_load_avg(rq_clock_task(rq), rq, 0);
+	if (update_rt_rq_load_avg(rq_clock_task(rq), rq, 0))
+		decayed = true;
+	if (update_dl_rq_load_avg(rq_clock_task(rq), rq, 0))
+		decayed = true;
 #ifdef CONFIG_HAVE_SCHED_AVG_IRQ
-	update_irq_load_avg(rq, 0);
+	if (update_irq_load_avg(rq, 0))
+		decayed = true;
 #endif
 #ifdef CONFIG_NO_HZ_COMMON
 	rq->last_blocked_load_update_tick = jiffies;
 #endif
+	if (decayed)
+		cpufreq_update_util(rq, 0);
 	rq_unlock_irqrestore(rq, &rf);
 }
 

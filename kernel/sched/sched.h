@@ -2227,7 +2227,8 @@ static inline unsigned long cpu_util(int cpu)
 	return min(
 		__cpu_util(cpu) + 
 		cpu_util_rt(cpu) + 
-		cpu_util_dl_rq(cpu_rq(cpu)),
+		cpu_util_dl_rq(cpu_rq(cpu)) +
+		cpu_util_irq(cpu_rq(cpu)),
 		capacity_orig_of(cpu)
 	);
 }
@@ -3540,7 +3541,7 @@ static inline unsigned long scale_irq_capacity(unsigned long util, unsigned long
 	util /= max_cap;
 	return util;
 }
-#undef cpu_util_irq
+
 
 #ifndef add_positive
 #define add_positive(_ptr, _val) do { \
