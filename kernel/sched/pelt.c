@@ -50,10 +50,13 @@ static u32 __accumulate_pelt_segments(u64 periods, u32 d1, u32 d3)
 
 static __always_inline u32
 accumulate_sum(u64 delta, struct sched_avg *sa,
-	       unsigned long load, unsigned long runnable, int running)
+	       unsigned long weight, int running, struct cfs_rq *cfs_rq)
 {
+	unsigned long scale_cpu;
 	u32 contrib = (u32)delta; /* p == 0 -> delta < 1024 */
 	u64 periods;
+
+	scale_cpu = arch_scale_cpu_capacity(NULL, cpu);
 
 	delta += sa->period_contrib;
 	periods = delta / 1024; /* A period is 1024us (~1ms) */
@@ -63,41 +66,31 @@ accumulate_sum(u64 delta, struct sched_avg *sa,
 	 */
 	if (periods) {
 		sa->load_sum = decay_load(sa->load_sum, periods);
-		sa->runnable_sum =
-			decay_load(sa->runnable_sum, periods);
+		if (cfs_rq) {
+			cfs_rq->runnable_load_sum =
+				decay_load(cfs_rq->runnable_load_sum, periods);
+		}
 		sa->util_sum = decay_load((u64)(sa->util_sum), periods);
 
 		/*
 		 * Step 2
 		 */
 		delta %= 1024;
-		if (load) {
-			/*
-			 * This relies on the:
-			 *
-			 * if (!load)
-			 *	runnable = running = 0;
-			 *
-			 * clause from ___update_load_sum(); this results in
-			 * the below usage of @contrib to disappear entirely,
-			 * so no point in calculating it.
-			 */
-			contrib = __accumulate_pelt_segments(periods,
-					1024 - sa->period_contrib, delta);
-		}
+		contrib = __accumulate_pelt_segments(periods,
+				1024 - sa->period_contrib, delta);
 	}
 	sa->period_contrib = delta;
 
-	if (load)
-		sa->load_sum += load * contrib;
-	if (runnable)
-		sa->runnable_sum += runnable * contrib << SCHED_CAPACITY_SHIFT;
+	if (weight) {
+		sa->load_sum += weight * contrib;
+		if (cfs_rq)
+			cfs_rq->runnable_load_sum += weight * contrib;
+	}
 	if (running)
-		sa->util_sum += contrib << SCHED_CAPACITY_SHIFT;
+		sa->util_sum += contrib * scale_cpu;
 
 	return periods;
 }
-
 /*
  * We can represent the historical contribution to runnable average as the
  * coefficients of a geometric series.  To do this we sub-divide our runnable
