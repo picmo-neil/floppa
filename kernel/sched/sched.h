@@ -574,7 +574,7 @@ struct cfs_rq {
 	 */
 	struct sched_avg avg;
 	unsigned long runnable_sum;
-	unsigned long runnable_avg
+	unsigned long runnable_avg;
 #ifdef CONFIG_FAIR_GROUP_SCHED
 	unsigned long tg_load_avg_contrib;
 	long propagate;
