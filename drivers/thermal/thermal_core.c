@@ -1773,8 +1773,10 @@ static int __init thermal_init(void)
 {
 	int result;
 
+#ifndef CONFIG_THERMAL_SWITCH
 	if (IS_ENABLED(CONFIG_MACH_XIAOMI_F9S) && mi_is_laurel())
 		device_scfg = kzalloc(sizeof(struct device), GFP_KERNEL);
+#endif
 
 	mutex_init(&poweroff_lock);
 	thermal_passive_wq = alloc_workqueue("thermal_passive_wq",
@@ -1793,6 +1795,7 @@ static int __init thermal_init(void)
 	if (result)
 		goto unregister_governors;
 
+#ifndef CONFIG_THERMAL_SWITCH
 	if (IS_ENABLED(CONFIG_MACH_XIAOMI_F9S) && mi_is_laurel() && device_scfg) {
 		dev_set_name(device_scfg, "thermal_message");
 		device_scfg->class = &thermal_class;
@@ -1808,6 +1811,7 @@ static int __init thermal_init(void)
 		if (result)
 			goto exit_zone_parse;
 	}
+#endif
 
 	result = of_parse_thermal_zones();
 	if (result)

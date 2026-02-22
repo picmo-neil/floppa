@@ -142,14 +142,14 @@ static bool legacy_timestamp_source = false;
 DEFINE_STATIC_KEY_FALSE(legacy_timestamp_key);
 EXPORT_SYMBOL(legacy_timestamp_key);
 
-static bool uname_bpf_spoof = false;
+static int uname_bpf_spoof = 0;
 
 static int __init set_uname_bpf_spoof(char *val)
 {
 	int tmp = uname_bpf_spoof;
 
 	if (get_option(&val, &tmp)) {
-		uname_bpf_spoof = tmp != 0;
+		uname_bpf_spoof = tmp;
 	}
 
 	return 0;
@@ -176,7 +176,7 @@ bool is_using_legacy_ir_hal(void)
 	return legacy_ir_hal;
 }
 
-bool is_bpf_spoof_enabled(void)
+int is_bpf_spoof_enabled(void)
 {
 	return uname_bpf_spoof;
 }
@@ -788,8 +788,7 @@ asmlinkage __visible void __init start_kernel(void)
 		disable_msm_perf ? "enabled" : "disabled");
 	pr_info("Workaround: legacy_timestamp_source=%s\n",
 			legacy_timestamp_source ? "enabled" : "disabled");
-	pr_info("Workaround: uname_bpf_spoof=%s\n",
-			uname_bpf_spoof ? "enabled" : "disabled");
+	pr_info("Workaround: uname_bpf_spoof=%d\n", uname_bpf_spoof);
 	pr_info("Workaround: legacy_ir_hal=%s\n",
 			legacy_ir_hal ? "enabled" : "disabled");
 	if (IS_ENABLED(CONFIG_MACH_XIAOMI_F9S))

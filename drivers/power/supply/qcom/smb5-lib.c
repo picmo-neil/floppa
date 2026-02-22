@@ -2419,6 +2419,9 @@ int smblib_set_prop_system_temp_level(struct smb_charger *chg,
     }
   }
 
+  system_temp_level = val->intval;
+  chg->system_temp_level = system_temp_level;
+
   if (bypass_charging) {
     if (chg->thermal_levels - 2 > system_temp_level)
       system_temp_level = chg->thermal_levels - 2;

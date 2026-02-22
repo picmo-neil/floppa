@@ -48,6 +48,7 @@
 #include <linux/delay.h>
 #include <drm/drm_bridge.h>
 #include <linux/msm_drm_notify.h>
+#include <linux/mi_detect.h>
 
 #if defined(USE_SPI_BUS)
 #include <linux/spi/spi.h>
@@ -928,6 +929,11 @@ static int __init gf_init(void)
 	 * that will key udev/mdev to add/remove /dev nodes.  Last, register
 	 * the driver which manages those device numbers.
 	 */
+	if (!mi_is_ginkgo()) {
+		pr_err("Skipping gf3208 init: Not Ginkgo device\n");
+		return -ENODEV;
+	}
+
 	if(fpsensor != 2) {
     	pr_err(" hml gf_init failed as fpsensor = %d(2=gdx)\n", fpsensor);
         return -1;

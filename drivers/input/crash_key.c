@@ -12,6 +12,7 @@
 #define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
 
 #include <linux/module.h>
+#include <linux/init.h>
 #include <linux/input.h>
 #include <linux/slab.h>
 
@@ -131,7 +132,7 @@ static void __exit crash_key_exit(void)
 	pr_info("Crash key driver unloaded\n");
 }
 
-module_init(crash_key_init);
+early_initcall(crash_key_init);
 module_exit(crash_key_exit);
 
 MODULE_AUTHOR("Flopster101");

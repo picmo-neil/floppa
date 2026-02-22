@@ -49,6 +49,7 @@
 #ifndef GOODIX_DRM_INTERFACE_WA
 #include <linux/msm_drm_notify.h>
 #endif
+#include <linux/mi_detect.h>
 
 #include "gf_spi.h"
 
@@ -958,6 +959,11 @@ static int __init gf_init(void)
 	 * the driver which manages those device numbers.
 	 */
 		
+	if (!mi_is_laurel()) {
+		pr_info("Skipping goodix_fod init: Not Laurel device\n");
+		return -ENODEV;
+	}
+
 		pr_info("zhc:%s in!\n", __func__);
 		pr_debug("zhc1:%s in!\n", __func__);
 

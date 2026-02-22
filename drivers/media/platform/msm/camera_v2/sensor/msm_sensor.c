@@ -10,7 +10,9 @@
  * GNU General Public License for more details.
  */
 #include "msm_sensor.h"
+#if IS_ENABLED(CONFIG_MACH_XIAOMI_C3J)
 #include <linux/gpio.h>
+#endif
 #include <linux/mi_detect.h>
 #include "msm_sd.h"
 #include "camera.h"
@@ -23,7 +25,9 @@
 #undef CDBG
 #define CDBG(fmt, args...) pr_debug(fmt, ##args)
 
+#if IS_ENABLED(CONFIG_MACH_XIAOMI_C3J)
 extern int lct_hardwareid;
+#endif
 static struct msm_camera_i2c_fn_t msm_sensor_cci_func_tbl;
 static struct msm_camera_i2c_fn_t msm_sensor_secure_func_tbl;
 
@@ -119,6 +123,7 @@ int32_t msm_sensor_free_sensor_data(struct msm_sensor_ctrl_t *s_ctrl)
 	return 0;
 }
 
+#if IS_ENABLED(CONFIG_MACH_XIAOMI_C3J)
 static int msm_sensor_match_vendor_id(struct msm_sensor_ctrl_t *s_ctrl)
 {
 	int rc = 0;
@@ -353,6 +358,7 @@ static int msm_sensor_get_sensor_id_gc02m1(struct msm_sensor_ctrl_t *s_ctrl)
 	}
 	return rc;
 }
+#endif
 
 int msm_sensor_power_up(struct msm_sensor_ctrl_t *s_ctrl)
 {
@@ -362,8 +368,10 @@ int msm_sensor_power_up(struct msm_sensor_ctrl_t *s_ctrl)
 	struct msm_camera_slave_info *slave_info;
 	const char *sensor_name;
 	uint32_t retry = 0;
+#if IS_ENABLED(CONFIG_MACH_XIAOMI_C3J)
 	uint32_t gval = 0;
-	bool is_ginkgo_c3j = IS_ENABLED(CONFIG_MACH_XIAOMI_C3J) && mi_is_ginkgo();
+	bool is_ginkgo_c3j = mi_is_ginkgo();
+#endif
 
 	if (!s_ctrl) {
 		pr_err("%s:%d failed: %pK\n",
@@ -393,7 +401,11 @@ int msm_sensor_power_up(struct msm_sensor_ctrl_t *s_ctrl)
 	CDBG("Sensor %d tagged as %s\n", s_ctrl->id,
 		(s_ctrl->is_secure)?"SECURE":"NON-SECURE");
 
+#if IS_ENABLED(CONFIG_MACH_XIAOMI_C3J)
 	for (retry = 0; retry < (is_ginkgo_c3j ? 2 : 3); retry++) {
+#else
+	for (retry = 0; retry < 3; retry++) {
+#endif
 		if (s_ctrl->is_secure) {
 			rc = msm_camera_tz_i2c_power_up(sensor_i2c_client);
 			if (rc < 0) {
@@ -415,6 +427,7 @@ int msm_sensor_power_up(struct msm_sensor_ctrl_t *s_ctrl)
 			sensor_i2c_client);
 		if (rc < 0)
 			return rc;
+#if IS_ENABLED(CONFIG_MACH_XIAOMI_C3J)
 		if (is_ginkgo_c3j) {
 			gval = gpio_get_value(132); /* get gpio value!!! */
 
@@ -466,6 +479,7 @@ int msm_sensor_power_up(struct msm_sensor_ctrl_t *s_ctrl)
 				}
 			}
 		}
+#endif
 		rc = msm_sensor_check_id(s_ctrl);
 		if (rc < 0) {
 			msm_camera_power_down(power_info,

@@ -318,6 +318,7 @@ struct msm_sensor_id_info_t {
 	struct msm_camera_i2c_reg_setting setting;
 };
 
+#ifdef CONFIG_MACH_XIAOMI_C3J
 enum msm_cci_i2c_master_t {
 	MSM_MASTER_0,
 	MSM_MASTER_1,
@@ -332,6 +333,7 @@ struct msm_vendor_id_info_t {
 	enum msm_camera_i2c_data_type data_type;
 	enum msm_cci_i2c_master_t cci_i2c_master;
 };
+#endif
 
 struct msm_camera_sensor_slave_info {
 	char sensor_name[32];
@@ -344,7 +346,9 @@ struct msm_camera_sensor_slave_info {
 	enum i2c_freq_mode_t i2c_freq_mode;
 	enum msm_camera_i2c_reg_addr_type addr_type;
 	struct msm_sensor_id_info_t sensor_id_info;
+#ifdef CONFIG_MACH_XIAOMI_C3J
 	struct msm_vendor_id_info_t vendor_id_info;
+#endif
 	struct msm_sensor_power_setting_array power_setting_array;
 	unsigned char  is_init_params_valid;
 	struct msm_sensor_init_params sensor_init_params;

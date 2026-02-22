@@ -58,6 +58,8 @@
 #define fts_gesture_resume              c3j_fts_gesture_resume
 #define fts_gesture_init                c3j_fts_gesture_init
 #define fts_gesture_exit                c3j_fts_gesture_exit
+#define fts_gesture_switch              c3j_fts_gesture_switch
+#define fts_ts_is_gesture_mode          c3j_fts_ts_is_gesture_mode
 #define fts_fod_readdata                c3j_fts_fod_readdata
 #define fts_fod_recovery                c3j_fts_fod_recovery
 #define fts_fod_suspend                 c3j_fts_fod_suspend

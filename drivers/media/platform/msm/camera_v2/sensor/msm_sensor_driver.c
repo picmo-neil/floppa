@@ -1114,6 +1114,43 @@ int32_t msm_sensor_driver_probe(void *setting,
 			rc = -ENOMEM;
 			goto free_slave_info;
 		}
+		/*
+		 * laurel camera HAL doesn't expect vendor_id_info so we
+		 * need to handle it in runtime, otherwise the HAL breaks.
+		 * copy it in two stages for laurel to avoid a 20 byte ABI
+		 * mismatch that would shift all fields past sensor_id_info.
+		 */
+#if IS_ENABLED(CONFIG_MACH_XIAOMI_C3J)
+		if (msm_is_ginkgo_c3j()) {
+			if (copy_from_user(slave_info32,
+				(void __user *)setting,
+				sizeof(*slave_info32))) {
+				pr_err("failed: copy_from_user");
+				rc = -EFAULT;
+				kfree(slave_info32);
+				goto free_slave_info;
+			}
+		} else {
+			const size_t pre = offsetof(
+				struct msm_camera_sensor_slave_info32,
+				vendor_id_info);
+			const size_t post = sizeof(*slave_info32) -
+				offsetof(
+					struct msm_camera_sensor_slave_info32,
+					power_setting_array);
+
+			if (copy_from_user(slave_info32,
+				(void __user *)setting, pre) ||
+			    copy_from_user(
+				&slave_info32->power_setting_array,
+				(void __user *)setting + pre, post)) {
+				pr_err("failed: copy_from_user");
+				rc = -EFAULT;
+				kfree(slave_info32);
+				goto free_slave_info;
+			}
+		}
+#else
 		if (copy_from_user(slave_info32, (void __user *)setting,
 			sizeof(*slave_info32))) {
 			pr_err("failed: copy_from_user");
@@ -1121,6 +1158,7 @@ int32_t msm_sensor_driver_probe(void *setting,
 			kfree(slave_info32);
 			goto free_slave_info;
 		}
+#endif
 
 		strlcpy(slave_info->actuator_name, slave_info32->actuator_name,
 			sizeof(slave_info->actuator_name));
@@ -1148,8 +1186,10 @@ int32_t msm_sensor_driver_probe(void *setting,
 		slave_info->sensor_id_info.sensor_id =
 			slave_info32->sensor_id_info.sensor_id;
 
+#if IS_ENABLED(CONFIG_MACH_XIAOMI_C3J)
 		if (msm_is_ginkgo_c3j())
 			slave_info->vendor_id_info = slave_info32->vendor_id_info;
+#endif
 		slave_info->sensor_id_info.setting.addr_type =
 			slave_info32->sensor_id_info.setting.addr_type;
 		slave_info->sensor_id_info.setting.data_type =
@@ -1222,12 +1262,43 @@ int32_t msm_sensor_driver_probe(void *setting,
 	} else
 #endif
 	{
+		/* Same ABI mismatch handling as the compat path */
+#if IS_ENABLED(CONFIG_MACH_XIAOMI_C3J)
+		if (msm_is_ginkgo_c3j()) {
+			if (copy_from_user(slave_info,
+				(void __user *)setting,
+				sizeof(*slave_info))) {
+				pr_err("failed: copy_from_user");
+				rc = -EFAULT;
+				goto free_slave_info;
+			}
+		} else {
+			const size_t pre = offsetof(
+				struct msm_camera_sensor_slave_info,
+				vendor_id_info);
+			const size_t post = sizeof(*slave_info) -
+				offsetof(
+					struct msm_camera_sensor_slave_info,
+					power_setting_array);
+
+			if (copy_from_user(slave_info,
+				(void __user *)setting, pre) ||
+			    copy_from_user(
+				&slave_info->power_setting_array,
+				(void __user *)setting + pre, post)) {
+				pr_err("failed: copy_from_user");
+				rc = -EFAULT;
+				goto free_slave_info;
+			}
+		}
+#else
 		if (copy_from_user(slave_info,
 			(void __user *)setting, sizeof(*slave_info))) {
 			pr_err("failed: copy_from_user");
 			rc = -EFAULT;
 			goto free_slave_info;
 		}
+#endif
 		if (!slave_info->sensor_id_info.setting.size ||
 			slave_info->sensor_id_info.setting.size >
 			I2C_REG_DATA_MAX) {
@@ -1376,10 +1447,13 @@ int32_t msm_sensor_driver_probe(void *setting,
 			s_ctrl->sensordata->cam_slave_info->sensor_id_info
 			.sensor_id &&
 			!(strcmp(slave_info->sensor_name,
-				s_ctrl->sensordata->cam_slave_info->sensor_name)) &&
-			(!msm_is_ginkgo_c3j() ||
+				s_ctrl->sensordata->cam_slave_info->sensor_name))
+#if IS_ENABLED(CONFIG_MACH_XIAOMI_C3J)
+			&& (!msm_is_ginkgo_c3j() ||
 			 (slave_info->vendor_id_info.vendor_id ==
-			  s_ctrl->sensordata->cam_slave_info->vendor_id_info.vendor_id))) {
+			  s_ctrl->sensordata->cam_slave_info->vendor_id_info.vendor_id))
+#endif
+			) {
 			pr_err("slot%d: sensor name: %s sensor id%d already probed\n",
 				slave_info->camera_id,
 				slave_info->sensor_name,
@@ -1480,8 +1554,10 @@ CSID_TG:
 	s_ctrl->sensordata->actuator_name = slave_info->actuator_name;
 	s_ctrl->sensordata->ois_name = slave_info->ois_name;
 	s_ctrl->sensordata->flash_name = slave_info->flash_name;
+#if IS_ENABLED(CONFIG_MACH_XIAOMI_C3J)
 	if (msm_is_ginkgo_c3j())
 		s_ctrl->sensordata->vendor_id_info = &(slave_info->vendor_id_info);
+#endif
 	/*
 	 * Update eeporm subdevice Id by input eeprom name
 	 */

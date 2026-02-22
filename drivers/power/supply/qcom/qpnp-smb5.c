@@ -1853,11 +1853,8 @@ static int smb5_batt_get_prop(struct power_supply *psy,
     val->intval = chg->fcc_stepper_enable;
     break;
   case POWER_SUPPLY_PROP_CHARGING_CALL_STATE:
-    if (IS_ENABLED(CONFIG_MACH_XIAOMI_F9S) && mi_is_laurel()) {
-      val->intval = chg->call_state;
-      break;
-    }
-    return -EINVAL;
+    val->intval = chg->call_state;
+    break;
 
   case POWER_SUPPLY_PROP_SYSTEM_TEMP_LEVEL:
     if (IS_ENABLED(CONFIG_MACH_XIAOMI_C3J) && mi_is_ginkgo()) {
