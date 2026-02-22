@@ -1,0 +1,391 @@
+name: FloppyKernel – Build Matrix
+
+on:
+  workflow_dispatch:
+    inputs:
+      build_target:
+        description: 'Target Device(s)'
+        required: true
+        default: 'unified'
+        type: choice
+        options:
+          - unified   # Mitrinket (Xiaomi 11 Lite NE 5G)
+          - separate  # Ginkgo + Laurel (Redmi Note 8/T)
+          - ginkgo    # Ginkgo Only
+          - laurel    # Laurel Only
+      compiler_type:
+        description: 'Compiler Toolchain'
+        required: true
+        default: 'aosp_clang'
+        type: choice
+        options:
+          - aosp_clang  # Stable Android Clang (Mirror)
+          - llvm_latest # Bleeding Edge LLVM (Upstream)
+      create_release:
+        description: 'Publish Release'
+        required: false
+        default: 'true'
+        type: boolean
+  push:
+    branches:
+      - main
+      - release/*
+    paths-ignore:
+      - '**.md'
+      - '.gitignore'
+
+permissions:
+  contents: write
+
+env:
+  # --- CORE DIRECTORIES ---
+  TOOLCHAIN_DIR: ${{ github.workspace }}/toolchains/custom-toolchain
+  CCACHE_DIR: "/home/runner/.ccache"
+  WP: ${{ github.workspace }} # CRITICAL: Required by do_build.sh
+  
+  # --- PERFORMANCE & TUNING ---
+  CCACHE_SIZE: "12G"
+  CCACHE_COMPRESS: "1"
+  USE_CCACHE: 1
+  
+  # --- KERNEL FLAGS ---
+  LLVM: "1"
+  LLVM_IAS: "1"
+  INSTALL_MOD_STRIP: "1"
+  KCPPFLAGS: "-DNDEBUG"
+
+jobs:
+  # [PHASE 1] STRATEGIC CONFIGURATION
+  configure:
+    name: ⚙️ Strategy Matrix
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.set-matrix.outputs.matrix }}
+      compiler: ${{ steps.set-vars.outputs.compiler }}
+    steps:
+      - name: Compute Build Matrix
+        id: set-matrix
+        run: |
+          # Robust Defaulting: Use input if dispatch, else 'separate' for push
+          if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
+            TARGET="${{ inputs.build_target }}"
+          else
+            TARGET="separate"
+          fi
+          
+          echo "::group::Target Resolution"
+          echo "Event: ${{ github.event_name }}"
+          echo "Selected Target: $TARGET"
+          
+          case "$TARGET" in
+            unified)
+              DEVICES='["mitrinket"]'
+              ;;
+            separate)
+              DEVICES='["ginkgo", "laurel_sprout"]'
+              ;;
+            ginkgo)
+              DEVICES='["ginkgo"]'
+              ;;
+            laurel)
+              DEVICES='["laurel_sprout"]'
+              ;;
+            *)
+              DEVICES='["ginkgo", "laurel_sprout"]'
+              ;;
+          esac
+          echo "::endgroup::"
+          
+          # Output JSON for Matrix
+          echo "matrix={\"device\": $DEVICES, \"variant\": [\"Vanilla\", \"KSUNext\", \"SukiSU\", \"RKSU\"]}" >> $GITHUB_OUTPUT
+
+      - name: Select Compiler
+        id: set-vars
+        run: |
+          COMPILER="${{ inputs.compiler_type || 'aosp_clang' }}"
+          echo "compiler=$COMPILER" >> $GITHUB_OUTPUT
+
+  # [PHASE 2] TACTICAL COMPILATION
+  build:
+    name: ${{ matrix.device }} • ${{ matrix.variant }}
+    needs: configure
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJson(needs.configure.outputs.matrix) }}
+
+    steps:
+      # 1. ENVIRONMENT SANITIZATION
+      - name: 🗑️ Disk Purge
+        run: |
+          echo "::group::Cleaning Environment"
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache &
+          sudo docker image prune --all --force &
+          wait
+          df -h
+          echo "::endgroup::"
+
+      # 2. RESOURCE AUGMENTATION
+      - name: 🧠 Swap Injection (12GB)
+        run: |
+          sudo fallocate -l 12G /swapfile
+          sudo chmod 600 /swapfile
+          sudo mkswap /swapfile
+          sudo swapon /swapfile
+
+      # 3. SOURCE MATERIAL
+      - name: Checkout Source
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 1
+
+      # 4. DEPENDENCY INJECTION
+      - name: Install Primitives
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y --no-install-recommends \
+            bc bison flex build-essential ninja-build lz4 zstd \
+            libssl-dev libelf-dev device-tree-compiler \
+            ccache binutils file optipng jpegoptim \
+            python3 python3-pip zip unzip lld jq
+
+      # 5. TOOLCHAIN ACQUISITION (AUTH-BACKED)
+      - name: Resolve Toolchain URL
+        id: toolchain-setup
+        env:
+          COMPILER_TYPE: ${{ needs.configure.outputs.compiler }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }} # Prevents API Rate Limiting
+        run: |
+          echo "::group::Fetching Upstream"
+          if [ "$COMPILER_TYPE" == "llvm_latest" ]; then
+            URL_SRC="https://raw.githubusercontent.com/PurrrsLitterbox/LLVM-weekly/main/latestlink.txt"
+            for i in {1..5}; do
+              LINK=$(curl -fsSL "$URL_SRC" 2>/dev/null | tr -d '[:space:]')
+              [ ! -z "$LINK" ] && break
+              sleep 2
+            done
+          elif [ "$COMPILER_TYPE" == "aosp_clang" ]; then
+            # Authenticated API Call
+            API_URL="https://api.github.com/repos/bachnxuan/aosp_clang_mirror/releases/latest"
+            LINK=$(curl -s -H "Authorization: token $GH_TOKEN" "$API_URL" | jq -r '.assets[] | select(.name | test("clang-r.*\\.tar\\.gz")) | .browser_download_url' | head -n 1)
+          fi
+          
+          if [ -z "$LINK" ] || [ "$LINK" == "null" ]; then
+             echo "::error::CRITICAL: Failed to fetch toolchain URL."
+             exit 1
+          fi
+          
+          echo "DOWNLOAD_URL=$LINK" >> $GITHUB_ENV
+          echo "cache_key=$(echo -n $LINK | sha256sum | head -c 16)" >> $GITHUB_OUTPUT
+          echo "::endgroup::"
+
+      # 6. CACHING STRATEGY
+      - name: Cache Toolchain
+        id: cache-llvm
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.TOOLCHAIN_DIR }}
+          key: ${{ needs.configure.outputs.compiler }}-${{ steps.toolchain-setup.outputs.cache_key }}
+
+      # 7. INSTALLATION PROTOCOL (HEURISTIC)
+      - name: Install Toolchain
+        if: steps.cache-llvm.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p "${{ env.TOOLCHAIN_DIR }}"
+          mkdir -p toolchain_temp
+          cd toolchain_temp
+          
+          echo "::group::Download & Extract"
+          wget --tries=5 --timeout=60 -qO clang_archive "${{ env.DOWNLOAD_URL }}"
+          
+          if file clang_archive | grep -q "Zstandard"; then
+            tar -I zstd -xf clang_archive
+          elif file clang_archive | grep -q "gzip"; then
+            tar -xzf clang_archive
+          else
+            tar -xf clang_archive
+          fi
+          echo "::endgroup::"
+
+          echo "::group::Seek & Destroy (Path Correction)"
+          # Find the binary regardless of folder structure
+          BIN_CLANG=$(find . -type f -path "*/bin/clang" | head -n 1)
+          
+          if [ -z "$BIN_CLANG" ]; then
+             echo "::error::MALFORMED: bin/clang not found in archive."
+             exit 1
+          fi
+          
+          # Determine True Root
+          TOOLCHAIN_ROOT=$(dirname $(dirname "$BIN_CLANG"))
+          echo "Root detected at: $TOOLCHAIN_ROOT"
+          
+          # Move to final location
+          mv "$TOOLCHAIN_ROOT"/* "${{ env.TOOLCHAIN_DIR }}/"
+          
+          cd ..
+          rm -rf toolchain_temp
+          echo "::endgroup::"
+
+      - name: Verify Toolchain
+        run: |
+          export PATH="${{ env.TOOLCHAIN_DIR }}/bin:$PATH"
+          clang --version | head -n 1
+
+      # 8. CCACHE INIT
+      - name: Setup CCache
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.CCACHE_DIR }}
+          key: ccache-${{ matrix.device }}-${{ matrix.variant }}-${{ github.sha }}
+          restore-keys: |
+            ccache-${{ matrix.device }}-${{ matrix.variant }}-
+            ccache-
+
+      - name: Initialize CCache
+        run: |
+          mkdir -p ${{ env.CCACHE_DIR }}
+          ccache -M ${{ env.CCACHE_SIZE }}
+          ccache -z
+
+      # 9. BUILD EXECUTION
+      - name: Execute Build
+        shell: bash -l {0}
+        run: |
+          ulimit -s unlimited
+          export PATH="${{ env.TOOLCHAIN_DIR }}/bin:/usr/lib/ccache:$PATH"
+          export MAKEFLAGS="-j$(nproc --all)"
+          
+          if command -v ld.lld >/dev/null 2>&1; then
+             export LD=ld.lld
+          fi
+          
+          case "${{ matrix.variant }}" in
+            Vanilla) FLAG="" ;;
+            KSUNext) FLAG="k" ;;
+            SukiSU)  FLAG="s" ;;
+            RKSU)    FLAG="u" ;;
+          esac
+          
+          echo "::group::Manifest"
+          echo "Device: ${{ matrix.device }}"
+          echo "Variant: ${{ matrix.variant }}"
+          echo "Workspace: $WP"
+          echo "::endgroup::"
+          
+          chmod +x do_build.sh ckbuild.sh
+          set -o pipefail
+          ./do_build.sh "${{ matrix.device }}" "$FLAG" 2>&1 | tee "$GITHUB_WORKSPACE/build.log"
+
+      # 10. DIAGNOSTICS & LOGS
+      - name: CCache Stats
+        if: always()
+        run: ccache -s
+
+      - name: Process Logs
+        if: always()
+        run: |
+          LOG="$GITHUB_WORKSPACE/build.log"
+          if [ -f "$LOG" ]; then
+            grep -nEi '(error|warning):' "$LOG" > "$GITHUB_WORKSPACE/full_issues.log" || true
+            grep -i "error:" "$GITHUB_WORKSPACE/full_issues.log" > "$GITHUB_WORKSPACE/errors.log" || true
+            grep -i "warning:" "$GITHUB_WORKSPACE/full_issues.log" > "$GITHUB_WORKSPACE/warnings.log" || true
+          fi
+
+      # 11. ARTIFACT RECOVERY (DEEP SCAN)
+      - name: Stage Artifacts
+        id: stage_zips
+        if: success()
+        run: |
+          mkdir -p release_artifacts
+          
+          echo "::group::Deep Scan"
+          # Find ZIPs >10MB, excluding the release dir itself to prevent recursion
+          find "$GITHUB_WORKSPACE" -maxdepth 5 -path "./release_artifacts" -prune -o -name "*.zip" -size +10M -print0 | xargs -0 -I {} cp -v {} release_artifacts/
+          
+          if [ -z "$(ls -A release_artifacts)" ]; then
+             echo "::warning::No artifacts found."
+             echo "zip_found=false" >> $GITHUB_OUTPUT
+          else
+             echo "zip_found=true" >> $GITHUB_OUTPUT
+          fi
+          echo "::endgroup::"
+
+      - name: Upload Logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: logs-${{ matrix.device }}-${{ matrix.variant }}
+          path: |
+            build.log
+            errors.log
+            warnings.log
+
+      - name: Upload Kernel ZIPs
+        if: steps.stage_zips.outputs.zip_found == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: kernel-${{ matrix.device }}-${{ matrix.variant }}
+          path: release_artifacts/*.zip
+          compression-level: 0
+
+  # [PHASE 3] RELEASE DEPLOYMENT
+  create_release:
+    name: 🚀 Publish Release
+    needs: build
+    runs-on: ubuntu-latest
+    # HARDENED CONDITION: Dispatch='true' OR Tag Trigger
+    if: |
+      success() && 
+      ((github.event_name == 'workflow_dispatch' && inputs.create_release == 'true') ||
+       startsWith(github.ref, 'refs/tags/'))
+    
+    steps:
+      - name: Checkout Repo
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Consolidate Artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: kernel-*
+          merge-multiple: true
+          path: artifacts
+
+      - name: Rename Assets
+        run: |
+          mkdir -p final_assets
+          DATE=$(date -u +%Y.%m.%d)
+          
+          if [ ! -d "artifacts" ] || [ -z "$(ls -A artifacts)" ]; then
+            echo "::error::Artifacts missing. Cannot release."
+            exit 1
+          fi
+          
+          cd artifacts
+          for file in *.zip; do
+             mv "$file" "../final_assets/${DATE}-R${{ github.run_number }}-${file}"
+          done
+          
+          echo "::notice::Final Assets:"
+          ls -lh ../final_assets/
+
+      - name: Release to GitHub
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="FloppyKernel-${{ github.run_number }}-$(date -u +%Y%m%d)"
+          TITLE="Floppy Kernel CI • Build ${{ github.run_number }}"
+          
+          NOTES="Automated Build
+          - **Date**: $(date -u)
+          - **Target**: ${{ inputs.build_target || 'push-event' }}
+          - **Compiler**: ${{ inputs.compiler_type || 'default' }}"
+          
+          gh release create "$TAG" \
+            --title "$TITLE" \
+            --notes "$NOTES" \
+            --target "${{ github.sha }}" \
+            final_assets/*.zip

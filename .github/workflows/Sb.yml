@@ -1,0 +1,100 @@
+name: Clone & Sync
+
+on:
+  workflow_dispatch:
+    inputs:
+      upstream_repository_url:
+        description: 'Upstream Repo URL (e.g., https://github.com/picmo-neil/floppa.git)'
+        required: true
+        type: string
+      upstream_branch:
+        description: 'Upstream Branch to clone'
+        required: true
+        default: 'main'
+      target_branch:
+        description: 'Target Branch in YOUR repo (Will be created if missing)'
+        required: true
+        default: 'floppy-clone'
+      force_overwrite:
+        description: 'Force Sync? (WARNING: Replaces all content on target branch)'
+        required: true
+        default: true
+        type: boolean
+
+jobs:
+  clone-and-sync:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write  # Critical for pushing the new branch
+
+    steps:
+      # 1. Checkout YOUR repo (Default branch) to get the .git context
+      # We do NOT specify 'ref' here, so it safely defaults to main/master.
+      - name: Initialize Repository Context
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # Fetch all history so we can see if branches exist
+
+      # 2. Clone the UPSTREAM repo to a temporary folder
+      - name: Fetch Upstream Content
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ inputs.upstream_repository_url }}
+          ref: ${{ inputs.upstream_branch }}
+          path: './temp_upstream_clone'
+
+      # 3. The "Brain": Handle Branch Creation, Switching, and Syncing
+      - name: Process Branch and Content
+        run: |
+          # --- Configuration ---
+          TARGET="${{ inputs.target_branch }}"
+          UPSTREAM_SRC="./temp_upstream_clone"
+          
+          echo "Configuring Git..."
+          git config --global user.name "GitHub Actions"
+          git config --global user.email "actions@github.com"
+
+          # --- Branch Detection Logic ---
+          echo "Checking if remote branch 'origin/$TARGET' exists..."
+          
+          if git ls-remote --exit-code --heads origin "$TARGET"; then
+            echo "Branch '$TARGET' FOUND. Switching to it..."
+            git checkout "$TARGET"
+            git pull origin "$TARGET" || echo "Pull failed (maybe empty), continuing..."
+          else
+            echo "Branch '$TARGET' NOT FOUND. Creating new ORPHAN branch..."
+            # --orphan creates a branch with no parents and disconnected history.
+            # This is PERFECT for importing a completely different repo.
+            git checkout --orphan "$TARGET"
+            # Remove all files from the staging area to start fresh
+            git rm -rf .
+          fi
+
+          # --- Content Sync Logic ---
+          echo "Wiping old content (preserving .git and temp source)..."
+          # We delete everything in the current directory EXCEPT .git and the source folder
+          find . -maxdepth 1 -not -name '.' -not -name '..' -not -name '.git' -not -name 'temp_upstream_clone' -exec rm -rf {} +
+
+          echo "Copying new content from upstream..."
+          # Copy all files (including hidden ones like .gitignore) from temp_upstream_clone to current dir
+          # cp -a is recursive and preserves attributes
+          cp -a "$UPSTREAM_SRC/." .
+          
+          # Clean up the temp folder so it doesn't get committed
+          rm -rf "$UPSTREAM_SRC"
+
+          # --- Commit and Push ---
+          echo "Staging changes..."
+          git add .
+          
+          # Check if there are changes to commit
+          if git diff --staged --quiet; then
+            echo "No changes detected. The branch is already up to date."
+          else
+            echo "Committing changes..."
+            git commit -m "Sync: Cloned ${{ inputs.upstream_branch }} from ${{ inputs.upstream_repository_url }}"
+            
+            echo "Pushing to '$TARGET'..."
+            # simple push usually works, but set-upstream ensures tracking
+            git push origin "$TARGET"
+          fi
