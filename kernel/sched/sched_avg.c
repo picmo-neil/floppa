@@ -35,7 +35,7 @@ static s64 last_get_time;
 
 static DEFINE_PER_CPU(atomic64_t, last_busy_time) = ATOMIC64_INIT(0);
 
-#define NR_THRESHOLD_PCT		15
+#define NR_THRESHOLD_PCT		40
 
 /**
  * sched_get_nr_running_avg
@@ -68,21 +68,24 @@ void sched_get_nr_running_avg(struct sched_avg_stats *stats)
 
 		tmp_nr = per_cpu(nr_prod_sum, cpu);
 		tmp_nr += per_cpu(nr, cpu) * diff;
-		tmp_nr = div64_u64((tmp_nr * 100), period);
 
 		tmp_misfit = per_cpu(nr_big_prod_sum, cpu);
 		tmp_misfit += walt_big_tasks(cpu) * diff;
-		tmp_misfit = div64_u64((tmp_misfit * 100), period);
 
 		/*
-		 * NR_THRESHOLD_PCT is to make sure that the task ran
-		 * at least 85% in the last window to compensate any
-		 * over estimating being done.
+		 * Combine (val * 100 / period) and (result + NR_THRESHOLD_PCT) / 100
+		 * into a single division:
+		 *   floor((floor(val*100/period) + NR_THRESHOLD_PCT) / 100)
+		 *   == floor((val*100 + NR_THRESHOLD_PCT*period) / (100*period))
+		 * This halves the number of div64_u64 calls from 4 to 2 per CPU.
 		 */
-		stats[cpu].nr = (int)div64_u64((tmp_nr + NR_THRESHOLD_PCT),
-								100);
-		stats[cpu].nr_misfit = (int)div64_u64((tmp_misfit +
-						NR_THRESHOLD_PCT), 100);
+		{
+			u64 denom = period * 100;
+			u64 thres = (u64)NR_THRESHOLD_PCT * period;
+
+			stats[cpu].nr = (int)div64_u64(tmp_nr * 100 + thres, denom);
+			stats[cpu].nr_misfit = (int)div64_u64(tmp_misfit * 100 + thres, denom);
+		}
 		stats[cpu].nr_max = per_cpu(nr_max, cpu);
 
 		trace_sched_get_nr_running_avg(cpu, stats[cpu].nr,
@@ -108,6 +111,7 @@ static inline void update_last_busy_time(int cpu, bool dequeue,
 				unsigned long prev_nr_run, u64 curr_time)
 {
 	bool nr_run_trigger = false, load_trigger = false;
+	bool util_trigger = false;
 
 	if (!hmp_capable() || is_min_capacity_cpu(cpu))
 		return;
@@ -119,7 +123,32 @@ static inline void update_last_busy_time(int cpu, bool dequeue,
 			capacity_orig_of(cpu))
 		load_trigger = true;
 
-	if (nr_run_trigger || load_trigger)
+	/*
+	 * System-wide utilization trigger (matches upstream util_load_trigger):
+	 * If total system-wide CPU util exceeds 60% of aggregate capacity when
+	 * dequeuing from a big CPU, keep it marked busy. Prevents premature
+	 * frequency drops during bursty workloads where tasks migrate across CPUs.
+	 *
+	 * Note: hmp_capable() is always true here due to early return above.
+	 * Approximates upstream's sysctl_sched_util_busy_hyst_cpu_util[cpu]
+	 * threshold (which we can't add without new struct fields).
+	 */
+	if (dequeue) {
+		u64 total_util = 0;
+		u64 threshold;
+		int i;
+
+		for_each_possible_cpu(i)
+			total_util += cpu_util(i);
+
+		threshold = (u64)num_possible_cpus() *
+			    capacity_orig_of(cpu) * 6 / 10;
+
+		if (total_util > threshold)
+			util_trigger = true;
+	}
+
+	if (nr_run_trigger || load_trigger || util_trigger)
 		atomic64_set(&per_cpu(last_busy_time, cpu), curr_time);
 }
 

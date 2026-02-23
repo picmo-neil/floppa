@@ -116,7 +116,7 @@ static bool sugov_should_update_freq(struct sugov_policy *sg_policy, u64 time)
 	}
 	
 	/* If the last frequency wasn't set yet then we can still amend it */
-	if (sg_policy->work_in_progress)
+	if (unlikely(sg_policy->work_in_progress))
 		return true;
 
 	/* No need to recalculate next freq for min_rate_limit_us
@@ -162,7 +162,7 @@ static void sugov_update_commit(struct sugov_policy *sg_policy, u64 time,
 	struct cpufreq_policy *policy = sg_policy->policy;
 	unsigned int cpu;
 
-	if (sg_policy->next_freq == next_freq)
+	if (likely(sg_policy->next_freq == next_freq))
 		return;
 
 	if (sugov_up_down_rate_limit(sg_policy, time, next_freq)) {
@@ -171,13 +171,10 @@ static void sugov_update_commit(struct sugov_policy *sg_policy, u64 time,
 		return;
 	}
 
-	if (sg_policy->next_freq == next_freq)
-		return;
-
 	sg_policy->next_freq = next_freq;
 	sg_policy->last_freq_update_time = time;
 
-	if (policy->fast_switch_enabled) {
+	if (likely(policy->fast_switch_enabled)) {
 		next_freq = cpufreq_driver_fast_switch(policy, next_freq);
 		if (!next_freq)
 			return;
@@ -187,7 +184,7 @@ static void sugov_update_commit(struct sugov_policy *sg_policy, u64 time,
 			trace_cpu_frequency(next_freq, cpu);
 		}
 	} else {
-		if (use_pelt())
+		if (unlikely(use_pelt()))
 			sg_policy->work_in_progress = true;
 		irq_work_queue(&sg_policy->irq_work);
 	}
@@ -224,7 +221,8 @@ static unsigned int get_next_freq(struct sugov_policy *sg_policy,
 
 	freq = (freq + (freq >> 2)) * util / max;
 
-	if (freq == sg_policy->cached_raw_freq && !sg_policy->need_freq_update)
+	if (likely(freq == sg_policy->cached_raw_freq &&
+		   !sg_policy->need_freq_update))
 		return sg_policy->next_freq;
 
 	sg_policy->need_freq_update = false;
@@ -245,7 +243,12 @@ static void sugov_get_util(unsigned long *util, unsigned long *max, int cpu,
 
 	*util = boosted_cpu_util(cpu, &loadcpu->walt_load);
 
-	if (likely(use_pelt())) {
+	/*
+	 * On WALT-enabled devices use_pelt() returns false, so this branch
+	 * is the cold path.  Mark it unlikely so the compiler lays out the
+	 * hot (WALT) path inline and branches forward to PELT.
+	 */
+	if (unlikely(use_pelt())) {
 		sched_avg_update(rq);
 		delta = time - rq->age_stamp;
 		if (unlikely(delta < 0))
@@ -264,11 +267,11 @@ static void sugov_set_iowait_boost(struct sugov_cpu *sg_cpu, u64 time,
 				   unsigned int flags)
 {
 	struct sugov_policy *sg_policy = sg_cpu->sg_policy;
- 
- 	if (!sg_policy->tunables->iowait_boost_enable)
+
+	if (!sg_policy->tunables->iowait_boost_enable)
  		return;
 
-	/* Clear iowait_boost if the CPU apprears to have been idle. */
+	/* Clear iowait_boost if the CPU appears to have been idle. */
 	if (sg_cpu->iowait_boost) {
 		s64 delta_ns = time - sg_cpu->last_update;
 
@@ -344,7 +347,7 @@ static void sugov_update_single(struct update_util_data *hook, u64 time,
 	unsigned int next_f;
 	bool busy;
 
-	if (flags & SCHED_CPUFREQ_PL)
+	if (unlikely(flags & SCHED_CPUFREQ_PL))
 		return;
 
 	flags &= ~SCHED_CPUFREQ_RT_DL;
@@ -355,10 +358,10 @@ static void sugov_update_single(struct update_util_data *hook, u64 time,
 		return;
 
 	/* Limits may have changed, don't skip frequency update */
-	busy = use_pelt() && !sg_policy->need_freq_update &&
+	busy = unlikely(use_pelt()) && !sg_policy->need_freq_update &&
 	       sugov_cpu_is_busy(sg_cpu);
 
-	if (flags & SCHED_CPUFREQ_DL) {
+	if (unlikely(flags & SCHED_CPUFREQ_DL)) {
 		/* clear cache when it's bypassed */
 		sg_policy->cached_raw_freq = 0;
 		next_f = policy->cpuinfo.max_freq;
@@ -400,14 +403,18 @@ static unsigned int sugov_next_freq_shared(struct sugov_cpu *sg_cpu, u64 time)
 		 * of the CPU utilization and the last frequency update is long
 		 * enough, don't take the CPU into account as it probably is
 		 * idle now (and clear iowait_boost for it).
+		 *
+		 * On WALT-enabled systems the irq_work fires after every window
+		 * rollover, so last_update timestamps are always fresh.  The
+		 * stale-check therefore rarely fires but we keep it for safety.
 		 */
 		delta_ns = time - j_sg_cpu->last_update;
-		if (delta_ns > stale_ns) {
+		if (unlikely(delta_ns > stale_ns)) {
 			j_sg_cpu->iowait_boost = 0;
 			j_sg_cpu->iowait_boost_pending = false;
 			continue;
 		}
-		if (j_sg_cpu->flags & SCHED_CPUFREQ_DL) {
+		if (unlikely(j_sg_cpu->flags & SCHED_CPUFREQ_DL)) {
 			/* clear cache when it's bypassed */
 			sg_policy->cached_raw_freq = 0;
 			return policy->cpuinfo.max_freq;
@@ -415,6 +422,12 @@ static unsigned int sugov_next_freq_shared(struct sugov_cpu *sg_cpu, u64 time)
 
 		j_util = j_sg_cpu->util;
 		j_max = j_sg_cpu->max;
+
+		/*
+		 * Track the highest util:max ratio across all CPUs in the
+		 * policy.  Using cross-multiplication avoids a division on
+		 * every iteration.
+		 */
 		if (j_util * max > j_max * util) {
 			util = j_util;
 			max = j_max;
@@ -434,7 +447,7 @@ static void sugov_update_shared(struct update_util_data *hook, u64 time,
 	unsigned long util, max;
 	unsigned int next_f;
 
-	if (flags & SCHED_CPUFREQ_PL)
+	if (unlikely(flags & SCHED_CPUFREQ_PL))
 		return;
 
 	sugov_get_util(&util, &max, sg_cpu->cpu, time);
@@ -452,7 +465,7 @@ static void sugov_update_shared(struct update_util_data *hook, u64 time,
 
 	if (sugov_should_update_freq(sg_policy, time) &&
 		!(flags & SCHED_CPUFREQ_CONTINUE)) {
-		if (flags & SCHED_CPUFREQ_DL) {
+		if (unlikely(flags & SCHED_CPUFREQ_DL)) {
 			next_f = sg_policy->policy->cpuinfo.max_freq;
 			/* clear cache when it's bypassed */
 			sg_policy->cached_raw_freq = 0;
@@ -475,7 +488,7 @@ static void sugov_work(struct kthread_work *work)
 				CPUFREQ_RELATION_L);
 	mutex_unlock(&sg_policy->work_lock);
 
-	if (use_pelt())
+	if (unlikely(use_pelt()))
 		sg_policy->work_in_progress = false;
 }
 
@@ -582,18 +595,19 @@ static ssize_t down_rate_limit_us_store(struct gov_attr_set *attr_set,
 }
 
 static ssize_t iowait_boost_enable_show(struct gov_attr_set *attr_set,
-                                        char *buf)
+					char *buf)
 {
 	struct sugov_tunables *tunables = to_sugov_tunables(attr_set);
-	return snprintf(buf, PAGE_SIZE, "%u\n",
-		tunables->iowait_boost_enable);
+
+	return snprintf(buf, PAGE_SIZE, "%u\n", tunables->iowait_boost_enable);
 }
 
 static ssize_t iowait_boost_enable_store(struct gov_attr_set *attr_set,
-                                         const char *buf, size_t count)
+					 const char *buf, size_t count)
 {
 	struct sugov_tunables *tunables = to_sugov_tunables(attr_set);
 	bool enable;
+
 	if (kstrtobool(buf, &enable))
 		return -EINVAL;
 
@@ -659,7 +673,7 @@ static int sugov_kthread_create(struct sugov_policy *sg_policy)
 	int ret;
 
 	/* kthread only required for slow path */
-	if (policy->fast_switch_enabled)
+	if (likely(policy->fast_switch_enabled))
 		return 0;
 
 	kthread_init_work(&sg_policy->work, sugov_work);
@@ -696,7 +710,7 @@ static int sugov_kthread_create(struct sugov_policy *sg_policy)
 static void sugov_kthread_stop(struct sugov_policy *sg_policy)
 {
 	/* kthread only required for slow path */
-	if (sg_policy->policy->fast_switch_enabled)
+	if (likely(sg_policy->policy->fast_switch_enabled))
 		return;
 
 	kthread_flush_worker(&sg_policy->worker);
@@ -912,7 +926,7 @@ static void sugov_stop(struct cpufreq_policy *policy)
 
 	synchronize_rcu();
 
-	if (!policy->fast_switch_enabled) {
+	if (unlikely(!policy->fast_switch_enabled)) {
 		irq_work_sync(&sg_policy->irq_work);
 		kthread_cancel_work_sync(&sg_policy->work);
 	}
@@ -925,7 +939,7 @@ static void sugov_limits(struct cpufreq_policy *policy)
 	unsigned int ret;
 	int cpu;
 
-	if (!policy->fast_switch_enabled) {
+	if (unlikely(!policy->fast_switch_enabled)) {
 		mutex_lock(&sg_policy->work_lock);
 		cpufreq_policy_apply_limits(policy);
 		mutex_unlock(&sg_policy->work_lock);

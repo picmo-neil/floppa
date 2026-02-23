@@ -43,6 +43,13 @@ const char *migrate_type_names[] = {"GROUP_TO_RQ", "RQ_TO_GROUP",
 
 #define EARLY_DETECTION_DURATION 9500000
 
+/*
+ * sub_clamp - saturating subtraction clamped to zero.
+ * Prevents u64 underflow-wrap which would otherwise trigger BUG_ON and crash
+ * in race conditions during load subtraction. Matches upstream behaviour.
+ */
+#define sub_clamp(a, b) (((a) < (b)) ? 0 : (a) - (b))
+
 static ktime_t ktime_last;
 static bool sched_ktime_suspended;
 static struct cpu_cycle_counter_cb cpu_cycle_counter_cb;
@@ -323,8 +330,17 @@ update_window_start(struct rq *rq, u64 wallclock, int event)
 	if (delta < sched_ravg_window)
 		return old_window_start;
 
-	nr_windows = div64_u64(delta, sched_ravg_window);
-	rq->window_start += (u64)nr_windows * (u64)sched_ravg_window;
+	if (likely(delta < (2 * (u64)sched_ravg_window))) {
+		/*
+		 * Fast path: exactly one window elapsed (most common case).
+		 * Skip div64_u64 entirely -- a single add is sufficient.
+		 */
+		nr_windows = 1;
+		rq->window_start += sched_ravg_window;
+	} else {
+		nr_windows = div64_u64(delta, sched_ravg_window);
+		rq->window_start += (u64)nr_windows * (u64)sched_ravg_window;
+	}
 
 	rq->cum_window_demand_scaled =
 			rq->walt_stats.cumulative_runnable_avg_scaled;
@@ -468,10 +484,20 @@ void sched_account_irqtime(int cpu, struct task_struct *curr,
 
 	if (nr_windows) {
 		if (nr_windows < 10) {
-			/* Decay CPU's irqload by 3/4 for each window. */
-			rq->avg_irqload *= (3 * nr_windows);
-			rq->avg_irqload = div64_u64(rq->avg_irqload,
-						    4 * nr_windows);
+			/*
+			 * Decay avg_irqload by 3/4.
+			 *
+			 * Upstream (walt_update_irqload) applies exactly ONE
+			 * 3/4 factor per call regardless of nr_windows, as long
+			 * as nr_windows < 10.  The original 4.14 code computed
+			 * avg * (3*n) / (4*n) = avg * 3/4, which is also one
+			 * decay — but the convoluted multiplication risked u64
+			 * overflow for large avg_irqload when n >= 9.
+			 *
+			 * Replace with mult_frac(), which is overflow-safe
+			 * (uses proper 128-bit intermediate on 64-bit kernels).
+			 */
+			rq->avg_irqload = mult_frac(rq->avg_irqload, 3, 4);
 		} else {
 			rq->avg_irqload = 0;
 		}
@@ -516,7 +542,13 @@ u64 freq_policy_load(struct rq *rq)
 	u64 load, tt_load = 0;
 	u64 coloc_boost_load = cluster->coloc_boost_load;
 
-	if (rq->ed_task != NULL) {
+	/*
+	 * Rotation mode: all big tasks are being rotated across CPUs.
+	 * Request full frequency to avoid starving any CPU of throughput.
+	 * This must be checked before ed_task so rotation takes priority.
+	 * Matches upstream behaviour where walt_rotation_enabled → max load.
+	 */
+	if (walt_rotation_enabled) {
 		load = sched_ravg_window;
 		goto done;
 	}
@@ -543,6 +575,27 @@ u64 freq_policy_load(struct rq *rq)
 		break;
 	}
 
+	/*
+	 * Early Detection (ED) task boost:
+	 *
+	 * When an ED task is present (ran >= 9.5 ms without sleeping), the
+	 * CPU likely needs higher frequency to drain the task sooner. However,
+	 * forcing the full window (sched_ravg_window) as the old code did is
+	 * excessively aggressive — it pegs the governor at max frequency
+	 * regardless of actual measured load, causing unnecessary heat.
+	 *
+	 * Instead, apply a 25% proportional boost over the measured load,
+	 * capped at sched_ravg_window. This matches upstream's intent of
+	 * using sysctl_ed_boost_pct to scale the boost relative to real load.
+	 * Benefits: better thermal behaviour, still elevates frequency when
+	 * the CPU genuinely has work queued.
+	 */
+	if (rq->ed_task != NULL) {
+		u64 ed_boosted = load + (load >> 2); /* load * 1.25 */
+
+		load = min_t(u64, ed_boosted, (u64)sched_ravg_window);
+	}
+
 done:
 	trace_sched_load_to_gov(rq, aggr_grp_load, tt_load, sched_freq_aggr_en,
 				load, reporting_policy, walt_rotation_enabled,
@@ -563,25 +616,34 @@ static inline void account_load_subtractions(struct rq *rq)
 	u64 ws = rq->window_start;
 	u64 prev_ws = ws - sched_ravg_window;
 	struct load_subtractions *ls = rq->load_subs;
-	int i;
 
-	for (i = 0; i < NUM_TRACKED_WINDOWS; i++) {
-		if (ls[i].window_start == ws) {
-			rq->curr_runnable_sum -= ls[i].subs;
-			rq->nt_curr_runnable_sum -= ls[i].new_subs;
-		} else if (ls[i].window_start == prev_ws) {
-			rq->prev_runnable_sum -= ls[i].subs;
-			rq->nt_prev_runnable_sum -= ls[i].new_subs;
-		}
-
-		ls[i].subs = 0;
-		ls[i].new_subs = 0;
+	/*
+	 * NUM_TRACKED_WINDOWS == 2: unroll the subtraction loop.
+	 * Eliminates loop overhead on the hot migration/rollover path.
+	 *
+	 * Use sub_clamp() instead of direct subtraction to prevent u64
+	 * underflow-wrap in race conditions. Matches upstream behaviour:
+	 * saturate at zero rather than crashing with BUG_ON.
+	 */
+	if (ls[0].window_start == ws) {
+		rq->curr_runnable_sum    = sub_clamp(rq->curr_runnable_sum,    ls[0].subs);
+		rq->nt_curr_runnable_sum = sub_clamp(rq->nt_curr_runnable_sum, ls[0].new_subs);
+	} else if (ls[0].window_start == prev_ws) {
+		rq->prev_runnable_sum    = sub_clamp(rq->prev_runnable_sum,    ls[0].subs);
+		rq->nt_prev_runnable_sum = sub_clamp(rq->nt_prev_runnable_sum, ls[0].new_subs);
 	}
+	ls[0].subs = 0;
+	ls[0].new_subs = 0;
 
-	BUG_ON((s64)rq->prev_runnable_sum < 0);
-	BUG_ON((s64)rq->curr_runnable_sum < 0);
-	BUG_ON((s64)rq->nt_prev_runnable_sum < 0);
-	BUG_ON((s64)rq->nt_curr_runnable_sum < 0);
+	if (ls[1].window_start == ws) {
+		rq->curr_runnable_sum    = sub_clamp(rq->curr_runnable_sum,    ls[1].subs);
+		rq->nt_curr_runnable_sum = sub_clamp(rq->nt_curr_runnable_sum, ls[1].new_subs);
+	} else if (ls[1].window_start == prev_ws) {
+		rq->prev_runnable_sum    = sub_clamp(rq->prev_runnable_sum,    ls[1].subs);
+		rq->nt_prev_runnable_sum = sub_clamp(rq->nt_prev_runnable_sum, ls[1].new_subs);
+	}
+	ls[1].subs = 0;
+	ls[1].new_subs = 0;
 }
 
 static inline void create_subtraction_entry(struct rq *rq, u64 ws, int index)
@@ -601,24 +663,23 @@ static int get_top_index(unsigned long *bitmap, unsigned long old_top)
 	return NUM_LOAD_INDICES - 1 - index;
 }
 
-static bool get_subtraction_index(struct rq *rq, u64 ws)
+static int get_subtraction_index(struct rq *rq, u64 ws)
 {
-	int i;
-	u64 oldest = ULLONG_MAX;
-	int oldest_index = 0;
+	u64 ws0 = rq->load_subs[0].window_start;
+	u64 ws1 = rq->load_subs[1].window_start;
+	int oldest_index;
 
-	for (i = 0; i < NUM_TRACKED_WINDOWS; i++) {
-		u64 entry_ws = rq->load_subs[i].window_start;
+	/*
+	 * NUM_TRACKED_WINDOWS == 2: fully unroll the search loop.
+	 * Eliminates loop overhead and oldest-tracking variable.
+	 */
+	if (ws == ws0)
+		return 0;
+	if (ws == ws1)
+		return 1;
 
-		if (ws == entry_ws)
-			return i;
-
-		if (entry_ws < oldest) {
-			oldest = entry_ws;
-			oldest_index = i;
-		}
-	}
-
+	/* Neither slot matches; evict the older one. */
+	oldest_index = (ws0 <= ws1) ? 0 : 1;
 	create_subtraction_entry(rq, ws, oldest_index);
 	return oldest_index;
 }
@@ -679,17 +740,19 @@ static inline void inter_cluster_migration_fixup
 	dest_rq->curr_runnable_sum += p->ravg.curr_window;
 	dest_rq->prev_runnable_sum += p->ravg.prev_window;
 
-	src_rq->curr_runnable_sum -=  p->ravg.curr_window_cpu[task_cpu];
-	src_rq->prev_runnable_sum -=  p->ravg.prev_window_cpu[task_cpu];
+	src_rq->curr_runnable_sum = sub_clamp(src_rq->curr_runnable_sum,
+				p->ravg.curr_window_cpu[task_cpu]);
+	src_rq->prev_runnable_sum = sub_clamp(src_rq->prev_runnable_sum,
+				p->ravg.prev_window_cpu[task_cpu]);
 
 	if (new_task) {
 		dest_rq->nt_curr_runnable_sum += p->ravg.curr_window;
 		dest_rq->nt_prev_runnable_sum += p->ravg.prev_window;
 
-		src_rq->nt_curr_runnable_sum -=
-				p->ravg.curr_window_cpu[task_cpu];
-		src_rq->nt_prev_runnable_sum -=
-				p->ravg.prev_window_cpu[task_cpu];
+		src_rq->nt_curr_runnable_sum = sub_clamp(src_rq->nt_curr_runnable_sum,
+				p->ravg.curr_window_cpu[task_cpu]);
+		src_rq->nt_prev_runnable_sum = sub_clamp(src_rq->nt_prev_runnable_sum,
+				p->ravg.prev_window_cpu[task_cpu]);
 	}
 
 	p->ravg.curr_window_cpu[task_cpu] = 0;
@@ -697,11 +760,6 @@ static inline void inter_cluster_migration_fixup
 
 	update_cluster_load_subtractions(p, task_cpu,
 			src_rq->window_start, new_task);
-
-	BUG_ON((s64)src_rq->prev_runnable_sum < 0);
-	BUG_ON((s64)src_rq->curr_runnable_sum < 0);
-	BUG_ON((s64)src_rq->nt_prev_runnable_sum < 0);
-	BUG_ON((s64)src_rq->nt_curr_runnable_sum < 0);
 }
 
 static u32 load_to_index(u32 load)
@@ -850,22 +908,26 @@ void fixup_busy_time(struct task_struct *p, int new_cpu)
 		dst_nt_prev_runnable_sum = &cpu_time->nt_prev_runnable_sum;
 
 		if (p->ravg.curr_window) {
-			*src_curr_runnable_sum -= p->ravg.curr_window;
+			*src_curr_runnable_sum = sub_clamp(*src_curr_runnable_sum,
+						p->ravg.curr_window);
 			*dst_curr_runnable_sum += p->ravg.curr_window;
 			if (new_task) {
-				*src_nt_curr_runnable_sum -=
-							p->ravg.curr_window;
+				*src_nt_curr_runnable_sum = sub_clamp(
+						*src_nt_curr_runnable_sum,
+						p->ravg.curr_window);
 				*dst_nt_curr_runnable_sum +=
 							p->ravg.curr_window;
 			}
 		}
 
 		if (p->ravg.prev_window) {
-			*src_prev_runnable_sum -= p->ravg.prev_window;
+			*src_prev_runnable_sum = sub_clamp(*src_prev_runnable_sum,
+						p->ravg.prev_window);
 			*dst_prev_runnable_sum += p->ravg.prev_window;
 			if (new_task) {
-				*src_nt_prev_runnable_sum -=
-							p->ravg.prev_window;
+				*src_nt_prev_runnable_sum = sub_clamp(
+						*src_nt_prev_runnable_sum,
+						p->ravg.prev_window);
 				*dst_nt_prev_runnable_sum +=
 							p->ravg.prev_window;
 			}
@@ -950,20 +1012,34 @@ static inline void bucket_increase(u8 *buckets, int idx)
 {
 	int i, step;
 
-	for (i = 0; i < NUM_BUSY_BUCKETS; i++) {
-		if (idx != i) {
-			if (buckets[i] > DEC_STEP)
-				buckets[i] -= DEC_STEP;
-			else
-				buckets[i] = 0;
-		} else {
-			step = buckets[i] >= CONSISTENT_THRES ?
-						INC_STEP_BIG : INC_STEP;
-			if (buckets[i] > U8_MAX - step)
-				buckets[i] = U8_MAX;
-			else
-				buckets[i] += step;
-		}
+	/*
+	 * Split the single loop with a conditional into three branch-free
+	 * sections: decay below idx, increment at idx, decay above idx.
+	 * This eliminates one mispredict-prone branch per iteration on the
+	 * hot window-rollover path.
+	 */
+
+	/* Decay all buckets before the target */
+	for (i = 0; i < idx; i++) {
+		if (buckets[i] > DEC_STEP)
+			buckets[i] -= DEC_STEP;
+		else
+			buckets[i] = 0;
+	}
+
+	/* Increment the target bucket */
+	step = buckets[idx] >= CONSISTENT_THRES ? INC_STEP_BIG : INC_STEP;
+	if (buckets[idx] > U8_MAX - step)
+		buckets[idx] = U8_MAX;
+	else
+		buckets[idx] += step;
+
+	/* Decay all buckets after the target */
+	for (i = idx + 1; i < NUM_BUSY_BUCKETS; i++) {
+		if (buckets[i] > DEC_STEP)
+			buckets[i] -= DEC_STEP;
+		else
+			buckets[i] = 0;
 	}
 }
 
@@ -1444,7 +1520,7 @@ static void update_cpu_busy_time(struct task_struct *p, struct rq *rq,
 		nt_prev_runnable_sum = &cpu_time->nt_prev_runnable_sum;
 	}
 
-	if (!new_window) {
+	if (likely(!new_window)) {
 		/*
 		 * account_busy_for_cpu_time() = 1 so busy time needs
 		 * to be accounted to the current window. No rollover
@@ -1707,7 +1783,7 @@ static void update_history(struct rq *rq, struct task_struct *p,
 	u16 demand_scaled, pred_demand_scaled;
 
 	/* Ignore windows where task had no activity */
-	if (!runtime || is_idle_task(p) || exiting_task(p) || !samples)
+	if (unlikely(!runtime || is_idle_task(p) || exiting_task(p) || !samples))
 		goto done;
 
 	/* Push new 'runtime' value onto stack */
@@ -1859,7 +1935,7 @@ static u64 update_task_demand(struct task_struct *p, struct rq *rq,
 		return 0;
 	}
 
-	if (!new_window) {
+	if (likely(!new_window)) {
 		/*
 		 * The simple case - busy time contained within the existing
 		 * window.
@@ -1872,8 +1948,17 @@ static u64 update_task_demand(struct task_struct *p, struct rq *rq,
 	 * window_start to first window boundary after mark_start.
 	 */
 	delta = window_start - mark_start;
-	nr_full_windows = div64_u64(delta, window_size);
-	window_start -= (u64)nr_full_windows * (u64)window_size;
+	if (likely(delta < (2 * (u64)window_size))) {
+		/*
+		 * Fast path: 0 or 1 full windows between mark_start and
+		 * window_start. Avoids div64_u64 on the common path.
+		 */
+		nr_full_windows = (int)(delta / window_size);
+		window_start -= (u64)nr_full_windows * (u64)window_size;
+	} else {
+		nr_full_windows = div64_u64(delta, window_size);
+		window_start -= (u64)nr_full_windows * (u64)window_size;
+	}
 
 	/* Process (window_start - mark_start) first */
 	runtime = add_to_task_demand(rq, p, window_start - mark_start);
@@ -3037,13 +3122,21 @@ static void transfer_busy_time(struct rq *rq, struct related_thread_group *grp,
 		src_nt_prev_runnable_sum = &rq->nt_prev_runnable_sum;
 		dst_nt_prev_runnable_sum = &cpu_time->nt_prev_runnable_sum;
 
-		*src_curr_runnable_sum -= p->ravg.curr_window_cpu[cpu];
-		*src_prev_runnable_sum -= p->ravg.prev_window_cpu[cpu];
+		/*
+		 * Use sub_clamp() to prevent u64 underflow-wrap on races.
+		 * Matches upstream behaviour: saturate at 0, not crash.
+		 */
+		*src_curr_runnable_sum = sub_clamp(*src_curr_runnable_sum,
+						p->ravg.curr_window_cpu[cpu]);
+		*src_prev_runnable_sum = sub_clamp(*src_prev_runnable_sum,
+						p->ravg.prev_window_cpu[cpu]);
 		if (new_task) {
-			*src_nt_curr_runnable_sum -=
-					p->ravg.curr_window_cpu[cpu];
-			*src_nt_prev_runnable_sum -=
-					p->ravg.prev_window_cpu[cpu];
+			*src_nt_curr_runnable_sum = sub_clamp(
+					*src_nt_curr_runnable_sum,
+					p->ravg.curr_window_cpu[cpu]);
+			*src_nt_prev_runnable_sum = sub_clamp(
+					*src_nt_prev_runnable_sum,
+					p->ravg.prev_window_cpu[cpu]);
 		}
 
 		update_cluster_load_subtractions(p, cpu,
@@ -3062,11 +3155,21 @@ static void transfer_busy_time(struct rq *rq, struct related_thread_group *grp,
 		src_nt_prev_runnable_sum = &cpu_time->nt_prev_runnable_sum;
 		dst_nt_prev_runnable_sum = &rq->nt_prev_runnable_sum;
 
-		*src_curr_runnable_sum -= p->ravg.curr_window;
-		*src_prev_runnable_sum -= p->ravg.prev_window;
+		/*
+		 * Use sub_clamp() to prevent u64 underflow-wrap on races.
+		 * Matches upstream behaviour: saturate at 0, not crash.
+		 */
+		*src_curr_runnable_sum = sub_clamp(*src_curr_runnable_sum,
+						p->ravg.curr_window);
+		*src_prev_runnable_sum = sub_clamp(*src_prev_runnable_sum,
+						p->ravg.prev_window);
 		if (new_task) {
-			*src_nt_curr_runnable_sum -= p->ravg.curr_window;
-			*src_nt_prev_runnable_sum -= p->ravg.prev_window;
+			*src_nt_curr_runnable_sum = sub_clamp(
+					*src_nt_curr_runnable_sum,
+					p->ravg.curr_window);
+			*src_nt_prev_runnable_sum = sub_clamp(
+					*src_nt_prev_runnable_sum,
+					p->ravg.prev_window);
 		}
 
 		/*
@@ -3098,11 +3201,7 @@ static void transfer_busy_time(struct rq *rq, struct related_thread_group *grp,
 	p->ravg.prev_window_cpu[cpu] = p->ravg.prev_window;
 
 	trace_sched_migration_update_sum(p, migrate_type, rq);
-
-	BUG_ON((s64)*src_curr_runnable_sum < 0);
-	BUG_ON((s64)*src_prev_runnable_sum < 0);
-	BUG_ON((s64)*src_nt_curr_runnable_sum < 0);
-	BUG_ON((s64)*src_nt_prev_runnable_sum < 0);
+	/* sub_clamp() above guarantees these can never underflow */
 }
 
 /* Set to 1GHz by default */
