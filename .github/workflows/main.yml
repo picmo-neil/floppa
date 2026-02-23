@@ -266,7 +266,8 @@ jobs:
 
       # ── 9. Verify toolchain ───────────────────────────────────────────────
       - name: ✅ Verify Toolchain
-        run: "$TOOLCHAIN_DIR/bin/clang" --version | head -n1
+        run: |
+          "$TOOLCHAIN_DIR/bin/clang" --version | head -n1
 
       # ── 10. Restore ccache ────────────────────────────────────────────────
       - name: ♻️ Restore CCache
