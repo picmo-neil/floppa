@@ -21,6 +21,10 @@
 #include "kernel_compat.h"
 #include "klog.h" // IWYU pragma: keep
 #include "selinux/selinux.h"
+#include "su_mount_ns.h"
+#ifdef CONFIG_KSU_SYSCALL_HOOK
+#include "syscall_handler.h"
+#endif
 
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 7, 0)
 static struct group_info root_groups = {
@@ -141,6 +145,9 @@ void disable_seccomp(void)
 void escape_with_root_profile(void)
 {
 	struct cred *cred;
+#ifdef CONFIG_KSU_SYSCALL_HOOK
+	struct task_struct *t;
+#endif
 
 	if (current_euid().val == 0) {
 		pr_warn("Already root, don't escape!\n");
@@ -188,4 +195,17 @@ void escape_with_root_profile(void)
 	disable_seccomp();
 
 	setup_selinux(profile->selinux_domain);
+
+#ifdef CONFIG_KSU_SYSCALL_HOOK
+	for_each_thread (current, t) {
+		ksu_set_task_tracepoint_flag(t);
+	}
+#endif
+
+	setup_mount_ns(profile->namespaces);
+}
+
+void escape_to_root_for_init(void)
+{
+	setup_selinux(KERNEL_SU_CONTEXT);
 }

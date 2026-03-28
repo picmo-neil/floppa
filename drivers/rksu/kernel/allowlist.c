@@ -25,6 +25,10 @@
 #include "allowlist.h"
 #include "manager.h"
 #include "kernel_compat.h"
+#include "su_mount_ns.h"
+#ifdef CONFIG_KSU_SYSCALL_HOOK
+#include "syscall_handler.h"
+#endif
 
 #define FILE_MAGIC 0x7f4b5355 // ' KSU', u32
 #define FILE_FORMAT_VERSION 3 // u32
@@ -81,7 +85,7 @@ static void init_default_profiles(void)
 	default_root_profile.groups[0] = 0;
 	memcpy(&default_root_profile.capabilities.effective, &full_cap,
 	       sizeof(default_root_profile.capabilities.effective));
-	default_root_profile.namespaces = 0;
+	default_root_profile.namespaces = KSU_NS_INHERITED;
 	strcpy(default_root_profile.selinux_domain, KSU_DEFAULT_SELINUX_DOMAIN);
 
 	// This means that we will umount modules by default!
@@ -266,6 +270,10 @@ out:
 
 	if (persist) {
 		persistent_allow_list();
+#ifdef CONFIG_KSU_SYSCALL_HOOK
+		// FIXME: use a new flag
+		ksu_mark_running_process();
+#endif
 	}
 
 	return result;
@@ -435,7 +443,10 @@ void persistent_allow_list(void)
 		goto put_task;
 	}
 	cb->func = do_persistent_allow_list;
-	task_work_add(tsk, cb, TWA_RESUME);
+	if (task_work_add(tsk, cb, TWA_RESUME)) {
+		kfree(cb);
+		pr_warn("save_allow_list add task_work failed\n");
+	}
 
 put_task:
 	put_task_struct(tsk);

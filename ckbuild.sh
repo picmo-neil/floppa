@@ -165,7 +165,7 @@ for arg in "$@"; do
         DO_KSU=1
     fi
     if [[ "$arg" == *s* ]]; then
-        echo "INFO: SukiSU argument passed"
+        echo "INFO: ReSukiSU argument passed"
         DO_SUKI=1
     fi
     if [[ "$arg" == *u* ]]; then
@@ -249,13 +249,13 @@ fi
 CK_TYPE=""
 CK_TYPE_SHORT=""
 if [[ "$DO_KSU" == "1" ]]; then
-    CK_TYPE="KSUNext-NOSUS"
+    CK_TYPE="KSUNext"
     CK_TYPE_SHORT="KN"
 elif [ "$DO_SUKI" == "1" ]; then
-    CK_TYPE="SukiSU-Ultra-NOSUS"
-    CK_TYPE_SHORT="SKS"
+    CK_TYPE="ReSukiSU"
+    CK_TYPE_SHORT="RESKS"
 elif [ "$DO_RKSU" == "1" ]; then
-    CK_TYPE="RKSU"
+    CK_TYPE="RKSU-NOSUS"
     CK_TYPE_SHORT="RKS"
 else
     CK_TYPE="Vanilla"
@@ -589,7 +589,7 @@ build() {
     mkdir -p out
     if [[ "$DO_REGEN" = "1" ]]; then
         if [[ "$DO_KSU" = "1" ]] || [[ "$DO_SUKI" = "1" ]]; then
-             echo "ERROR: Can't regenerate with KSU or SukiSU argument"
+             echo "ERROR: Can't regenerate with KSU or ReSukiSU argument"
              exit 1
         fi
         # Clean any existing .config to avoid picking up settings from previous builds
@@ -950,7 +950,7 @@ fi
 prep_build
 build
 
-# Apply KPM patch for SukiSU builds
+# Apply KPM patch for ReSukiSU builds
 if ! apply_kpm_patch; then
     echo "ERROR: KPM patching failed"
     exit 1

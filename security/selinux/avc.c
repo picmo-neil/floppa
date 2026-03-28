@@ -50,7 +50,6 @@ extern u32 susfs_priv_app_sid;
 bool susfs_is_avc_log_spoofing_enabled = false;
 #endif
 
-
 struct avc_entry {
 	u32			ssid;
 	u32			tsid;

@@ -26,7 +26,7 @@ endchoice
 
 choice
 	prompt "Hook method"
-	depends on KSU_NEXT || KSU_SUKI
+	depends on KSU_NEXT || KSU_SUKI || KSU_RKSU
 	default KSU_KPROBES_HOOK
 	help
 	  Select which hook method to use.
@@ -47,6 +47,13 @@ config KSU_MANUAL_HOOK
 	bool "Use manual hooks"
 	help
 	  Use manual hooks instead of kprobes/tracepoints.
+
+config KSU_SYSCALL_HOOK
+	bool "KernelSU syscall hook mode."
+	depends on KPROBES && KRETPROBES && HAVE_SYSCALL_TRACEPOINTS
+	help
+	  Enable KPROBES, KRETPROBES and TRACEPOINT hook for KernelSU core.
+	  This should not be used on kernel below 5.10.
 
 endchoice
 

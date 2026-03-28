@@ -835,12 +835,13 @@ static ssize_t mem_rw(struct file *file, char __user *buf,
 		vma = find_vma(mm, addr);
 		if (vma && vma->vm_file) {
 			struct inode *inode = file_inode(vma->vm_file);
-			if (unlikely(inode->i_mapping->flags & BIT_SUS_MAPS) && susfs_is_current_proc_umounted()) {
+			if (unlikely(inode->i_state & BIT_SUS_MAPS) && susfs_is_current_proc_umounted()) {
 				if (write) {
 					copied = -EFAULT;
 				} else {
 					copied = -EIO;
 				}
+				break;
 			}
 		}
 #endif
@@ -2252,9 +2253,9 @@ out:
 }
 
 struct map_files_info {
-	unsigned long	start;
-	unsigned long	end;
 	fmode_t		mode;
+	unsigned int	len;
+	unsigned char	name[4*sizeof(long)+2]; /* max: %lx-%lx\0 */
 };
 
 /*
@@ -2422,7 +2423,7 @@ proc_map_files_readdir(struct file *file, struct dir_context *ctx)
 			if (!vma->vm_file)
 				continue;
 #ifdef CONFIG_KSU_SUSFS_SUS_MAP
-			if (unlikely(file_inode(vma->vm_file)->i_mapping->flags & BIT_SUS_MAPS) &&
+			if (unlikely(file_inode(vma->vm_file)->i_state & BIT_SUS_MAPS) &&
 				susfs_is_current_proc_umounted())
 			{
 				continue;
@@ -2431,9 +2432,10 @@ proc_map_files_readdir(struct file *file, struct dir_context *ctx)
 			if (++pos <= ctx->pos)
 				continue;
 
-			info.start = vma->vm_start;
-			info.end = vma->vm_end;
 			info.mode = vma->vm_file->f_mode;
+			info.len = snprintf(info.name,
+					sizeof(info.name), "%lx-%lx",
+					vma->vm_start, vma->vm_end);
 			if (flex_array_put(fa, i++, &info, GFP_KERNEL))
 				BUG();
 		}
@@ -2442,13 +2444,9 @@ proc_map_files_readdir(struct file *file, struct dir_context *ctx)
 	mmput(mm);
 
 	for (i = 0; i < nr_files; i++) {
-		char buf[4 * sizeof(long) + 2];	/* max: %lx-%lx\0 */
-		unsigned int len;
-
 		p = flex_array_get(fa, i);
-		len = snprintf(buf, sizeof(buf), "%lx-%lx", p->start, p->end);
 		if (!proc_fill_cache(file, ctx,
-				      buf, len,
+				      p->name, p->len,
 				      proc_map_files_instantiate,
 				      task,
 				      (void *)(unsigned long)p->mode))
