@@ -100,7 +100,7 @@ import com.resukisu.resukisu.ui.screen.ExecuteModuleActionScreen
 import com.resukisu.resukisu.ui.screen.FlashIt
 import com.resukisu.resukisu.ui.screen.FlashScreen
 import com.resukisu.resukisu.ui.screen.InstallScreen
-import com.resukisu.resukisu.ui.screen.LogViewerScreen
+import com.resukisu.resukisu.ui.screen.SulogScreen
 import com.resukisu.resukisu.ui.screen.TemplateEditorScreen
 import com.resukisu.resukisu.ui.screen.UmountManagerScreen
 import com.resukisu.resukisu.ui.screen.about.AboutScreen
@@ -216,7 +216,6 @@ class MainActivity : ComponentActivity() {
             setContent {
                 KernelSUTheme {
                     val context = LocalContext.current
-                    val snackBarHostState = remember { SnackbarHostState() }
 
                     LaunchedEffect(zipUri) {
                         if (zipUri.isNullOrEmpty()) return@LaunchedEffect
@@ -253,7 +252,6 @@ class MainActivity : ComponentActivity() {
 
                     CompositionLocalProvider(
                         LocalNavigator provides navigator,
-                        LocalSnackbarHost provides snackBarHostState,
                         LocalDensity provides density
                     ) {
                         HandleDeepLink(
@@ -357,6 +355,7 @@ class MainActivity : ComponentActivity() {
                                         val pageKey = content.contentKey.toString()
                                         val navContent = LocalNavAnimatedContentScope.current
                                         val transition = navContent.transition
+                                        val snackBarHostState = remember { SnackbarHostState() }
 
                                         val tripe =
                                             if (pageKey == navigator.current()
@@ -442,7 +441,8 @@ class MainActivity : ComponentActivity() {
                                             MaterialTheme.colorScheme.surfaceContainer
 
                                         CompositionLocalProvider(
-                                            LocalHazeState provides if (CardConfig.isCustomBackgroundEnabled) rememberHazeState() else null
+                                            LocalHazeState provides if (CardConfig.isCustomBackgroundEnabled) rememberHazeState() else null,
+                                            LocalSnackbarHost provides snackBarHostState,
                                         ) {
                                             Surface(
                                                 modifier = tripe.first,
@@ -477,6 +477,7 @@ class MainActivity : ComponentActivity() {
                                 entryProvider = entryProvider {
                                     entry<Route.About> { AboutScreen() }
                                     entry<Route.OpenSourceLicense> { OpenSourceLicenseScreen() }
+                                    entry<Route.Sulog> { SulogScreen() }
                                     entry<Route.Main> { MainScreen() }
                                     entry<Route.AppProfileTemplate> { AppProfileTemplateScreen() }
                                     entry<Route.TemplateEditor> { key ->
@@ -505,7 +506,6 @@ class MainActivity : ComponentActivity() {
                                     entry<Route.Settings> { MainScreen() }
                                     entry<Route.MoreSettings> { MoreSettingsScreen() }
                                     entry<Route.SuSFSConfig> { SuSFSConfigScreen() }
-                                    entry<Route.LogViewer> { LogViewerScreen() }
                                     entry<Route.UmountManager> { UmountManagerScreen() }
                                     entry<Route.KernelFlash> { key ->
                                         KernelFlashScreen(
@@ -734,8 +734,14 @@ fun MainScreen() {
                     userScrollEnabled = userScrollEnabled,
                 ) { pageIndex ->
                     if (pages.isEmpty()) return@HorizontalPager
-                    val destination = pages[pageIndex]
-                    destination.direction(paddingBottom)
+
+                    val snackBarHostState = remember { SnackbarHostState() }
+                    CompositionLocalProvider(
+                        LocalSnackbarHost provides snackBarHostState,
+                    ) {
+                        val destination = pages[pageIndex]
+                        destination.direction(paddingBottom)
+                    }
                 }
             }
 

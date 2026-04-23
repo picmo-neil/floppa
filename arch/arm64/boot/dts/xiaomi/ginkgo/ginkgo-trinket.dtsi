@@ -32,6 +32,10 @@
 	};
 };
 
+&sdhc_1 {
+	qcom,disable-clk-scaling;
+};
+
 &sdhc_2 {
 	cd-gpios = <&tlmm 98 0>;
 };

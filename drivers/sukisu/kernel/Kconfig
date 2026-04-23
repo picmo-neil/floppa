@@ -15,6 +15,22 @@ config KSU_DEBUG
 	  help
 		Enable KernelSU debug mode.
 
+config KSU_TOOLKIT_SUPPORT
+      bool "KernelSU toolkit support"
+      depends on KSU
+      default n
+      help
+        Enable KernelSU Toolkit (https://github.com/backslashxx/ksu_toolkit) support.
+        For testing and debugging purposes.
+        Support ksu toolkit features as below:
+        1: CHANGE_MANAGER_UID sys_reboot extensions
+        2: CHANGE_KSUVER sys_reboot extensions
+        3: CHANGE_SPOOF_UNAME sys_reboot extensions
+        4: CHANGE_KSUFLAGS sys_reboot_extensions
+        5: allow userspace pull list entries (always supported)
+        6: sulog (Not supported for now, use ksu's upstream sulog feature instead)
+        If you don't know what is that, DON'T enable this!
+
 config KSU_FULL_NAME_FORMAT
           string "KernelSU full name format"
           depends on KSU
@@ -29,21 +45,29 @@ config KSU_FULL_NAME_FORMAT
             %BRANCH_NAME% = current Git branch name
             %KSU_VERSION% = KSU version code
 
-config KSU_ALLOWLIST_WORKAROUND
-	bool "KernelSU Session Keyring Init workaround"
-	depends on KSU
-	default n
-	help
-	  Enable session keyring init workaround for problematic devices.
-	  Useful for situations where the SU allowlist is not kept after a reboot
-
-
 config KSU_MULTI_MANAGER_SUPPORT
 	bool "Multi KernelSU manager support"
 	depends on KSU
 	default y
 	help
 		Enable multi KernelSU manager support
+
+config KSU_DISABLE_MANAGER
+	bool "Disable KernelSU manager integration"
+	depends on KSU
+	default n
+	help
+	  Disable manager APK detection and manager-specific handling.
+	  Root will be used in place of manager-only functionality.
+
+config KSU_DISABLE_POLICY
+	bool "Disable KernelSU policy profiles"
+	depends on KSU
+	default n
+	help
+	  Disable per-app root/non-root profile customization.
+	  Escalation will always use the default full root profile, and
+	  non-root handling will follow the global umount policy only.
 
 config KPM
 	  bool "Enable SukiSU KPM"

@@ -28,8 +28,8 @@ use crate::{
         restorecon::{restore_syscon, setsyscon},
         sepolicy,
         utils::{
-            ensure_clean_dir, ensure_dir_exists, ensure_file_exists, get_zip_uncompressed_size,
-            getprop, switch_cgroups,
+            detach_process_group, ensure_clean_dir, ensure_dir_exists, ensure_file_exists,
+            get_zip_uncompressed_size, getprop, switch_cgroups,
         },
     },
     assets, defs,
@@ -219,9 +219,9 @@ pub fn exec_script<T: AsRef<Path>>(path: T, wait: bool) -> Result<()> {
     let mut command = &mut Command::new(assets::BUSYBOX_PATH);
     #[cfg(unix)]
     {
-        command = command.process_group(0);
         command = unsafe {
             command.pre_exec(|| {
+                detach_process_group(true);
                 // ignore the error?
                 switch_cgroups();
                 Ok(())

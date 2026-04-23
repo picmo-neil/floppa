@@ -92,6 +92,7 @@
 	vdd-supply = <&pm6125_l24>;
 	qcom,vdd-voltage-level = <2950000 2950000>;
 	qcom,vdd-current-level = <0 570000>;
+	qcom,disable-clk-scaling;
 
 	vdd-io-supply = <&pm6125_l11>;
 	qcom,vdd-io-always-on;

@@ -19,9 +19,13 @@ object Natives {
     // 12143: breaking: new supercall impl
     // 32310: new get_allow_list ioctl
     // 34634(upstream 32336): new set_sepolicy ioctl 
-    const val MINIMAL_SUPPORTED_KERNEL = 34634
+    // 34685(upstream 32377): add set_init_pgrp ioctl
+    // 34709: breaking: unify uapi
+    // 34713: change kernel_su_domain to u:r:ksu:s0
+    // 34795: feature id 3 to adb root
+    const val MINIMAL_SUPPORTED_KERNEL = 34795
 
-    const val KERNEL_SU_DOMAIN = "u:r:su:s0"
+    const val KERNEL_SU_DOMAIN = "u:r:ksu:s0"
 
     const val ROOT_UID = 0
     const val ROOT_GID = 0
@@ -65,6 +69,9 @@ object Natives {
     external fun isSuEnabled(): Boolean
     external fun setSuEnabled(enabled: Boolean): Boolean
 
+    external fun isSuLogEnabled(): Boolean
+    external fun setSuLogEnabled(enabled: Boolean): Boolean
+
     /**
      * Kernel module umount can be disabled temporarily.
      *  0: disabled
@@ -73,16 +80,6 @@ object Natives {
      */
     external fun isKernelUmountEnabled(): Boolean
     external fun setKernelUmountEnabled(enabled: Boolean): Boolean
-
-
-    /**
-     * Su Log can be enabled/disabled.
-     *  0: disabled
-     *  1: enabled
-     *  negative : error
-     */
-    external fun isSuLogEnabled(): Boolean
-    external fun setSuLogEnabled(enabled: Boolean): Boolean
 
     external fun isKPMEnabled(): Boolean
     external fun getHookType(): String

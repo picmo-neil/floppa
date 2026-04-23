@@ -1863,16 +1863,10 @@ static int sdhci_msm_pm_qos_parse_cpu_groups(struct device *dev,
 {
 	struct device_node *np = dev->of_node;
 	u32 mask;
-	int nr_groups;
+	int nr_groups = 1;
 	int ret;
 	int i;
 
-	/* Read cpu group mapping */
-	nr_groups = of_property_count_u32_elems(np, "qcom,pm-qos-cpu-groups");
-	if (nr_groups <= 0) {
-		ret = -EINVAL;
-		goto out;
-	}
 	pdata->pm_qos_data.cpu_group_map.nr_groups = nr_groups;
 	pdata->pm_qos_data.cpu_group_map.mask =
 		kcalloc(nr_groups, sizeof(cpumask_t), GFP_KERNEL);
@@ -2043,6 +2037,9 @@ struct sdhci_msm_pltfm_data *sdhci_msm_populate_pdata(struct device *dev,
 	else if (!msm_host->mmc->clk_scaling.pltfm_freq_table ||
 			!msm_host->mmc->clk_scaling.pltfm_freq_table_sz)
 		dev_err(dev, "bad dts clock scaling frequencies\n");
+
+	pdata->disable_clk_scaling =
+		of_property_read_bool(np, "qcom,disable-clk-scaling");
 
 	/*
 	 * Few hosts can support DDR52 mode at the same lower
@@ -5075,7 +5072,8 @@ static int sdhci_msm_probe(struct platform_device *pdev)
 	msm_host->mmc->caps2 |= msm_host->pdata->caps2;
 	msm_host->mmc->caps2 |= MMC_CAP2_BOOTPART_NOACC;
 	msm_host->mmc->caps2 |= MMC_CAP2_HS400_POST_TUNING;
-	msm_host->mmc->caps2 |= MMC_CAP2_CLK_SCALE;
+	if (!msm_host->pdata->disable_clk_scaling)
+		msm_host->mmc->caps2 |= MMC_CAP2_CLK_SCALE;
 	msm_host->mmc->caps2 |= MMC_CAP2_SANITIZE;
 	msm_host->mmc->caps2 |= MMC_CAP2_MAX_DISCARD_SIZE;
 	msm_host->mmc->caps2 |= MMC_CAP2_SLEEP_AWAKE;

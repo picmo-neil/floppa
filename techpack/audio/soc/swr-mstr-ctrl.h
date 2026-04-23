@@ -13,6 +13,7 @@
 #ifndef _SWR_WCD_CTRL_H
 #define _SWR_WCD_CTRL_H
 #include <linux/module.h>
+#include <linux/pm_qos.h>
 #include <soc/swr-wcd.h>
 #include <soc/qcom/pm.h>
 
@@ -168,6 +169,7 @@ struct swr_mstr_ctrl {
 	bool ipc_wakeup_triggered;
 	enum swrm_pm_state pm_state;
 	wait_queue_head_t pm_wq;
+	struct pm_qos_request pm_qos_req;
 	int wlock_holders;
 	u32 intr_mask;
 	u32 swr_irq_wakeup_capable;

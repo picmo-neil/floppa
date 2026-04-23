@@ -1,17 +1,20 @@
 @file:Suppress("UnstableApiUsage")
 
-import com.android.build.gradle.internal.api.BaseVariantOutputImpl
-import com.android.build.gradle.tasks.PackageAndroidArtifact
-
 plugins {
     alias(libs.plugins.agp.app)
-    alias(libs.plugins.kotlin)
     alias(libs.plugins.compose.compiler)
-    alias(libs.plugins.ksp)
+    alias(libs.plugins.kotlin.serialization)
     alias(libs.plugins.lsplugin.apksign)
     id("kotlin-parcelize")
 }
 
+val androidCompileSdkVersion: Int by rootProject.extra
+val androidCompileNdkVersion: String by rootProject.extra
+val androidBuildToolsVersion: String by rootProject.extra
+val androidMinSdkVersion: Int by rootProject.extra
+val androidTargetSdkVersion: Int by rootProject.extra
+val androidSourceCompatibility: JavaVersion by rootProject.extra
+val androidTargetCompatibility: JavaVersion by rootProject.extra
 val managerVersionCode: Int by rootProject.extra
 val managerVersionName: String by rootProject.extra
 
@@ -22,15 +25,52 @@ apksign {
     keyPasswordProperty = "KEY_PASSWORD"
 }
 
+val baseCFlags = listOf(
+    "-Wall", "-Qunused-arguments", "-fvisibility=hidden", "-fvisibility-inlines-hidden",
+    "-fno-exceptions", "-fno-stack-protector", "-fomit-frame-pointer",
+    "-Wno-builtin-macro-redefined", "-Wno-unused-value", "-D__FILE__=__FILE_NAME__"
+)
+val baseCppFlags = baseCFlags + "-fno-rtti"
+
 android {
     namespace = "me.weishu.kernelsu"
+    val isPrBuild = project.findProperty("IS_PR_BUILD")?.toString()?.toBoolean() ?: false
 
     buildTypes {
+        debug {
+            externalNativeBuild {
+                cmake {
+                    arguments += listOf("-DCMAKE_CXX_FLAGS_DEBUG=-Og", "-DCMAKE_C_FLAGS_DEBUG=-Og")
+                }
+            }
+        }
         release {
             isMinifyEnabled = true
             isShrinkResources = true
             vcsInfo.include = false
+            if (isPrBuild) applicationIdSuffix = ".dev"
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
+            externalNativeBuild {
+                cmake {
+                    arguments += "-DDEBUG_SYMBOLS_PATH=${layout.buildDirectory.get().asFile.absolutePath}/symbols"
+                    arguments += "-DCMAKE_BUILD_TYPE=Release"
+
+                    val releaseFlags = listOf(
+                        "-flto", "-ffunction-sections", "-fdata-sections", "-Wl,--gc-sections",
+                        "-fno-unwind-tables", "-fno-asynchronous-unwind-tables", "-Wl,--exclude-libs,ALL"
+                    )
+                    val configFlags = listOf("-Oz", "-DNDEBUG").joinToString(" ")
+
+                    cppFlags += releaseFlags
+                    cFlags += releaseFlags
+
+                    arguments += listOf(
+                        "-DCMAKE_CXX_FLAGS_RELEASE=$configFlags",
+                        "-DCMAKE_C_FLAGS_RELEASE=$configFlags",
+                        "-DCMAKE_SHARED_LINKER_FLAGS=-Wl,--gc-sections -Wl,--exclude-libs,ALL -Wl,--icf=all -s -Wl,--hash-style=sysv -Wl,-z,norelro"
+                    )
+                }
+            }
         }
     }
 
@@ -42,17 +82,11 @@ android {
     }
 
     packaging {
-        jniLibs {
+        dex {
             useLegacyPackaging = true
         }
-        resources {
-            // https://stackoverflow.com/a/58956288
-            // It will break Layout Inspector, but it's unused for release build.
-            excludes += "META-INF/*.version"
-            // https://github.com/Kotlin/kotlinx.coroutines?tab=readme-ov-file#avoiding-including-the-debug-infrastructure-in-the-resulting-apk
-            excludes += "DebugProbesKt.bin"
-            // https://issueantenna.com/repo/kotlin/kotlinx.coroutines/issues/3158
-            excludes += "kotlin-tooling-metadata.json"
+        jniLibs {
+            useLegacyPackaging = true
         }
     }
 
@@ -60,23 +94,6 @@ android {
         cmake {
             path = file("src/main/cpp/CMakeLists.txt")
         }
-    }
-
-    applicationVariants.all {
-        outputs.forEach {
-            val output = it as BaseVariantOutputImpl
-            output.outputFileName = "KernelSU_${managerVersionName}_${managerVersionCode}-$name.apk"
-        }
-        kotlin.sourceSets {
-            getByName(name) {
-                kotlin.srcDir("build/generated/ksp/$name/kotlin")
-            }
-        }
-    }
-
-    // https://stackoverflow.com/a/77745844
-    tasks.withType<PackageAndroidArtifact> {
-        doFirst { appMetadata.asFile.orNull?.writeText("") }
     }
 
     dependenciesInfo {
@@ -87,18 +104,61 @@ android {
     androidResources {
         generateLocaleConfig = true
     }
+
+    compileSdk = androidCompileSdkVersion
+    ndkVersion = androidCompileNdkVersion
+    buildToolsVersion = androidBuildToolsVersion
+
+    defaultConfig {
+        minSdk = androidMinSdkVersion
+        targetSdk = androidTargetSdkVersion
+        versionCode = managerVersionCode
+        versionName = managerVersionName
+
+        buildConfigField("boolean", "IS_PR_BUILD", isPrBuild.toString())
+
+        externalNativeBuild {
+            cmake {
+                arguments += "-DANDROID_STL=none"
+                cFlags += baseCFlags + "-std=c2x"
+                cppFlags += baseCppFlags + "-std=c++2b"
+            }
+        }
+
+        ndk {
+            abiFilters += listOf("arm64-v8a", "armeabi-v7a")
+        }
+    }
+
+    lint {
+        abortOnError = true
+        checkReleaseBuilds = false
+    }
+
+    compileOptions {
+        sourceCompatibility = androidSourceCompatibility
+        targetCompatibility = androidTargetCompatibility
+    }
 }
 
-ksp {
-    arg("compose-destinations.defaultTransitions", "none")
+androidComponents {
+    onVariants(selector().withBuildType("release")) {
+        it.packaging.resources.excludes.addAll(listOf("META-INF/**", "kotlin/**", "org/**", "**.bin"))
+    }
+}
+
+base {
+    archivesName.set(
+        "KernelSU_${managerVersionName}_${managerVersionCode}"
+    )
 }
 
 dependencies {
     implementation(libs.androidx.activity.compose)
-    implementation(libs.androidx.navigation.compose)
 
     implementation(platform(libs.androidx.compose.bom))
     implementation(libs.androidx.compose.material.icons.extended)
+    implementation(libs.androidx.compose.material3)
     implementation(libs.androidx.compose.ui)
     implementation(libs.androidx.compose.ui.tooling.preview)
 
@@ -108,17 +168,16 @@ dependencies {
     implementation(libs.androidx.lifecycle.runtime.compose)
     implementation(libs.androidx.lifecycle.runtime.ktx)
     implementation(libs.androidx.lifecycle.viewmodel.compose)
+    implementation(libs.androidx.lifecycle.viewmodel.navigation3)
 
-    implementation(libs.compose.destinations.core)
-    ksp(libs.compose.destinations.ksp)
+    implementation(libs.androidx.navigation3.runtime)
+    implementation(libs.androidx.navigationevent.compose)
 
     implementation(libs.com.github.topjohnwu.libsu.core)
     implementation(libs.com.github.topjohnwu.libsu.service)
     implementation(libs.com.github.topjohnwu.libsu.io)
 
     implementation(libs.dev.rikka.rikkax.parcelablelist)
-
-    implementation(libs.io.coil.kt.coil.compose)
 
     implementation(libs.kotlinx.coroutines.core)
 
@@ -128,9 +187,20 @@ dependencies {
 
     implementation(libs.lsposed.cxx)
 
+    implementation(libs.hiddenapibypass)
+
     implementation(libs.miuix)
     implementation(libs.miuix.icons)
+    implementation(libs.miuix.navigation3.ui)
 
-    implementation(libs.haze)
+    implementation(platform(libs.okhttp.bom))
+    implementation(libs.okhttp)
+
+    implementation(libs.backdrop)
     implementation(libs.capsule)
+    implementation(libs.haze)
+
+    implementation(libs.material.kolor)
+
+    implementation(libs.appiconloader)
 }

@@ -182,7 +182,6 @@ TRACE_EVENT(sched_enq_deq_task,
 			, __entry->demand, __entry->pred_demand
 			)
 );
-
 /*
  * Tracepoint for waking up a task:
  */

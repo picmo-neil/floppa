@@ -1,36 +1,17 @@
-name: Build Manager (main)
+name: Build Manager
 
 on:
   push:
-    branches: [ "main", "ci" ]
+    branches: [ "main", "dev", "ci", "staging" ]
     paths:
       - '.github/workflows/build-manager.yml'
-      - '.github/workflows/ksud.yml'
-      - '.github/workflows/build-manager-common.yml'
-      - '.github/workflows/build-ksud.yml'
-      - '.github/workflows/build-lkm.yml'
-      - '.github/workflows/ddk-lkm.yml'
       - 'manager/**'
-      - 'kernel/**'
-      - 'userspace/**'
-  pull_request:
-    branches: [ "main" ]
-    paths:
-      - '.github/workflows/build-manager.yml'
-      - '.github/workflows/build-lkm.yml'
-      - '.github/workflows/ksud.yml'
-      - 'manager/**'
-      - 'kernel/**'
       - 'userspace/**'
   workflow_call:
+  workflow_dispatch:  
 
 jobs:
-  build-lkm:
-    uses: ./.github/workflows/build-lkm.yml
-    secrets: inherit
-
   build-ksud:
-    needs: build-lkm
     strategy:
       matrix:
         include:
@@ -38,22 +19,22 @@ jobs:
             os: ubuntu-latest
           - target: armv7-linux-androideabi
             os: ubuntu-latest
-          - target: x86_64-linux-android
-            os: ubuntu-latest
+
     uses: ./.github/workflows/ksud.yml
     with:
       target: ${{ matrix.target }}
-      os: ${{ matrix.os }}
+      pack_lkm: false
+      pack_ksuinit: false
 
   build-manager:
     needs: build-ksud
+    if: always() && needs.build-ksud.result == 'success'
     strategy:
       matrix:
         include:
           - manager_type: normal
           - manager_type: spoofed
-    uses: ./.github/workflows/build-manager-common.yml
+    uses: ./.github/workflows/build-manager-core.yml
     secrets: inherit
     with:
       manager_type: ${{ matrix.manager_type }}
-      need_upload: true

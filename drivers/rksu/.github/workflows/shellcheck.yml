@@ -4,12 +4,14 @@ on:
   push:
     branches:
       - 'main'
+      - 'dev'
     paths:
       - '.github/workflows/shellcheck.yml'
       - '**/*.sh'
   pull_request:
     branches:
       - 'main'
+      - 'dev'
     paths:
       - '.github/workflows/shellcheck.yml'
       - '**/*.sh'
@@ -24,4 +26,4 @@ jobs:
         uses: ludeeus/action-shellcheck@2.0.0
         with:
           ignore_names: gradlew
-          ignore_paths: ./userspace/ksud/src/installer.sh ./scripts/rsubot.sh
+          ignore_paths: ./userspace/ksud/src/installer.sh ./.github/scripts/setup-rust-build.sh

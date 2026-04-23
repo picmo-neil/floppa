@@ -591,6 +591,9 @@ error:
 	return retval;
 }
 
+#if defined(CONFIG_KSU_MANUAL_HOOK) && !defined(CONFIG_KSU_RKSU)
+extern int ksu_handle_setresuid(uid_t ruid, uid_t euid, uid_t suid);
+#endif
 
 /*
  * This function implements a generic ability to update ruid, euid,
@@ -603,6 +606,12 @@ SYSCALL_DEFINE3(setresuid, uid_t, ruid, uid_t, euid, uid_t, suid)
 	struct cred *new;
 	int retval;
 	kuid_t kruid, keuid, ksuid;
+
+#if defined(CONFIG_KSU_MANUAL_HOOK) && !defined(CONFIG_KSU_RKSU)
+	if (ksu_handle_setresuid(ruid, euid, suid)) {
+		pr_info("Something wrong with ksu_handle_setresuid()\\n");
+	}
+#endif
 
 	kruid = make_kuid(ns, ruid);
 	keuid = make_kuid(ns, euid);

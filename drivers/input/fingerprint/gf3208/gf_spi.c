@@ -354,7 +354,9 @@ static irqreturn_t gf_irq(int irq, void *handle)
 	//wake_lock_timeout(&fp_wakelock, msecs_to_jiffies(WAKELOCK_HOLD_TIME));
 	__pm_wakeup_event(&fp_ws, WAKELOCK_HOLD_TIME);//for kernel 4.9
 	sendnlmsg(&msg);
-	if (gf_dev->device_available == 1) {
+	if (gf_dev->device_available == 1 &&
+	    gf_dev->wait_finger_down &&
+	    gf_dev->fb_black) {
 		printk("%s:shedule_work\n",__func__);
 		gf_dev->wait_finger_down = false;
 		schedule_work(&gf_dev->work);

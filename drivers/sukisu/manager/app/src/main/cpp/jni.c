@@ -299,20 +299,20 @@ NativeBridge(setSuEnabled, jboolean, jboolean enabled) {
 	return set_su_enabled(enabled);
 }
 
-NativeBridgeNP(isKernelUmountEnabled, jboolean) {
-    return is_kernel_umount_enabled();
-}
-
-NativeBridge(setKernelUmountEnabled, jboolean, jboolean enabled) {
-    return set_kernel_umount_enabled(enabled);
-}
-
 NativeBridgeNP(isSuLogEnabled, jboolean) {
     return is_sulog_enabled();
 }
 
 NativeBridge(setSuLogEnabled, jboolean, jboolean enabled) {
     return set_sulog_enabled(enabled);
+}
+
+NativeBridgeNP(isKernelUmountEnabled, jboolean) {
+    return is_kernel_umount_enabled();
+}
+
+NativeBridge(setKernelUmountEnabled, jboolean, jboolean enabled) {
+    return set_kernel_umount_enabled(enabled);
 }
 
 NativeBridge(getUserName, jstring, jint uid) {
@@ -351,8 +351,8 @@ NativeBridge(setDynamicManager, jboolean, jint size, jstring hash) {
 }
 
 NativeBridgeNP(getDynamicManager, jobject) {
-	struct dynamic_manager_user_config config;
-	bool result = get_dynamic_manager(&config);
+	struct ksu_dynamic_manager_cmd cmd;
+	bool result = get_dynamic_manager(&cmd);
 
 	if (!result) {
         LOGD("getDynamicManager: failed to get dynamic manager config");
@@ -362,10 +362,10 @@ NativeBridgeNP(getDynamicManager, jobject) {
 	jobject obj = CREATE_JAVA_OBJECT("com/resukisu/resukisu/Natives$DynamicManagerConfig");
 	jclass cls = GetEnvironment()->FindClass(env, "com/resukisu/resukisu/Natives$DynamicManagerConfig");
 
-	SET_INT_FIELD(obj, cls, size, (jint)config.size);
-	SET_STRING_FIELD(obj, cls, hash, config.hash);
+	SET_INT_FIELD(obj, cls, size, (jint)cmd.size);
+	SET_STRING_FIELD(obj, cls, hash, (const char *)cmd.hash);
 
-    LOGD("getDynamicManager: size=0x%x, hash=%.16s...", config.size, config.hash);
+    LOGD("getDynamicManager: size=0x%x, hash=%.16s...", cmd.size, cmd.hash);
 	return obj;
 }
 
@@ -419,47 +419,49 @@ NativeBridgeNP(getManagersList, jobject) {
     return obj;
 }
 
-int fork_dont_care_and_exec_ksud(const char *path) {
-	int pid = fork();
-	if (pid < 0) {
-		PLOGE("fork");
-		return pid;
-	} else if (pid > 0) {
-		int status = 0;
-		if (TEMP_FAILURE_RETRY(waitpid(pid, &status, 0)) < 0) {
-			PLOGE("waitpid");
-			return -1;
-		}
-		if (!WIFEXITED(status) || WEXITSTATUS(status) != 0) {
-			LOGE("magica bootstrap child failed, status=%d", status);
-		}
-		return pid;
-	}
+int fork_dont_care_and_exec_ksud(const char *path, const char *pkg) {
+    int pid = fork();
+    if (pid < 0) {
+        PLOGE("fork");
+        return pid;
+    } else if (pid > 0) {
+        int status = 0;
+        if (TEMP_FAILURE_RETRY(waitpid(pid, &status, 0)) < 0) {
+            PLOGE("waitpid");
+            return -1;
+        }
+        if (!WIFEXITED(status) || WEXITSTATUS(status) != 0) {
+            LOGE("magica bootstrap child failed, status=%d", status);
+        }
+        return pid;
+    }
 
-	if (setuid(0) != 0) {
-		PLOGE("setuid");
-		_exit(1);
-	}
+    if (setuid(0) != 0) {
+        PLOGE("setuid");
+        _exit(1);
+    }
 
-	pid = fork();
-	if (pid < 0) {
-		PLOGE("fork 2");
-		_exit(1);
-	} else if (pid > 0) {
-		_exit(0);
-	}
+    pid = fork();
+    if (pid < 0) {
+        PLOGE("fork 2");
+        _exit(1);
+    } else if (pid > 0) {
+        _exit(0);
+    }
 
-	execl(path, "ksud", "late-load", "--magica", "5555", nullptr);
-	PLOGE("exec magica");
-	_exit(1);
+    execl(path, "ksud", "late-load", "--magica", "5555","--package-name", pkg, nullptr);
+    PLOGE("exec magica");
+    _exit(1);
 }
 
 JNIEXPORT void JNICALL
 Java_com_resukisu_resukisu_magica_AppZygotePreload_forkDontCareAndExecKsud(JNIEnv *env,
                                                                            jclass clazz,
-                                                                           jstring ksud_path) {
+                                                                           jstring ksud_path, jstring pkg_name) {
     const char *path = GetEnvironment()->GetStringUTFChars(env, ksud_path, nullptr);
-    LOGD("executing magica %s", path);
-	fork_dont_care_and_exec_ksud(path);
+    const char *pkg = GetEnvironment()->GetStringUTFChars(env, pkg_name, nullptr);
+    LOGD("executing magica %s (pkg %s)", path, pkg);
+    fork_dont_care_and_exec_ksud(path, pkg);
     GetEnvironment()->ReleaseStringUTFChars(env, ksud_path, path);
+    GetEnvironment()->ReleaseStringUTFChars(env, pkg_name, pkg);
 }

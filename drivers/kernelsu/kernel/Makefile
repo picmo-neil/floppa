@@ -8,6 +8,7 @@ $(info -- MDIR: $(MDIR))
 all: check_symbol
 	make -C $(KDIR) M=$(MDIR) modules
 	./check_symbol kernelsu.ko $(KDIR)/vmlinux
+
 compdb:
 	python3 $(MDIR)/.vscode/generate_compdb.py -O $(KDIR) $(MDIR)
 clean:

@@ -4,6 +4,7 @@ import android.os.Parcelable
 import androidx.annotation.Keep
 import androidx.compose.runtime.Immutable
 import kotlinx.parcelize.Parcelize
+import kotlinx.serialization.Serializable
 
 /**
  * @author weishu
@@ -17,9 +18,12 @@ object Natives {
     // 10977: change groups_count and groups to avoid overflow write
     // 11071: Fix the issue of failing to set a custom SELinux type.
     // 12143: breaking: new supercall impl
-    const val MINIMAL_SUPPORTED_KERNEL = 22000
+    // 32310: new get_allow_list ioctl
+    // 32336: new set_sepolicy ioctl
+    // 32377: add set_init_pgrp ioctl
+    const val MINIMAL_SUPPORTED_KERNEL = 32377
 
-    const val KERNEL_SU_DOMAIN = "u:r:su:s0"
+    const val KERNEL_SU_DOMAIN = "u:r:ksu:s0"
 
     const val ROOT_UID = 0
     const val ROOT_GID = 0
@@ -31,17 +35,19 @@ object Natives {
     val version: Int
         external get
 
-    // get the uid list of allowed su processes.
-    val allowList: IntArray
-        external get
-
     val isSafeMode: Boolean
         external get
 
     val isLkmMode: Boolean
         external get
 
+    val isLateLoadMode: Boolean
+        external get
+
     val isManager: Boolean
+        external get
+
+    val isPrBuild: Boolean
         external get
 
     external fun uidShouldUmount(uid: Int): Boolean
@@ -77,6 +83,8 @@ object Natives {
      */
     external fun getUserName(uid: Int): String?
 
+    external fun getSuperuserCount(): Int
+
     private const val NON_ROOT_DEFAULT_PROFILE_KEY = "$"
     private const val NOBODY_UID = 9999
 
@@ -101,9 +109,10 @@ object Natives {
         return version != -1 && version < MINIMAL_SUPPORTED_KERNEL
     }
 
+    @Keep
     @Immutable
     @Parcelize
-    @Keep
+    @Serializable
     data class Profile(
         // and there is a default profile for root and non-root
         val name: String,
