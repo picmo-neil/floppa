@@ -1,0 +1,445 @@
+name: FloppyKernel – Build Matrix
+
+
+
+on:
+  workflow_dispatch:
+    inputs:
+      build_target:
+        description: 'Target Device(s)'
+        required: true
+        default: 'separate'
+        type: choice
+        options:
+          - unified   # Mitrinket (Redmi Note 8/8T + Mi A3 unified)
+          - separate  # Ginkgo + Laurel separate builds
+          - ginkgo    # Redmi Note 8/8T only
+          - laurel    # Xiaomi Mi A3 only
+      compiler_type:
+        description: 'Compiler Toolchain'
+        required: true
+        default: 'aosp_clang'
+        type: choice
+        options:
+          - aosp_clang   # AOSP Clang mirror (stable)
+          - llvm_latest  # Bleeding-edge upstream LLVM
+      create_release:
+        description: 'Publish GitHub Release'
+        required: false
+        default: 'true'
+        type: boolean
+
+  push:
+    branches:
+      - main
+      - release/*
+    paths-ignore:
+      - '**.md'
+      - '.gitignore'
+
+concurrency:
+  group: floppy-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+
+# ─────────────────────────────────────────────────────────────────────────────
+# GLOBAL ENV  –  every job/step inherits these
+# ─────────────────────────────────────────────────────────────────────────────
+env:
+  # ── Layout ────────────────────────────────────────────────────────────────
+  # WP must be workspace root so that ckbuild.sh's `cat ../x` reads from here.
+  WP: ${{ github.workspace }}
+
+  # ── Toolchain ─────────────────────────────────────────────────────────────
+  # CLANG_TYPE=custom  tells original ckbuild.sh to use CUST_DIR as-is and
+  # skip re-downloading.  CUST_DIR must match where we install the toolchain.
+  TOOLCHAIN_DIR: ${{ github.workspace }}/toolchains/custom-toolchain
+  CLANG_TYPE: custom
+  CUST_DIR:   ${{ github.workspace }}/toolchains/custom-toolchain
+
+  # ── ccache ────────────────────────────────────────────────────────────────
+  # ckbuild.sh only sets CCACHE_DIR when IS_GP==1 (Gitpod). On CI IS_GP=0,
+  # so we export it here – the script inherits it and ccache works correctly.
+  CCACHE_DIR:  ${{ github.workspace }}/.ccache
+  CCACHE_SIZE: "12G"
+  USE_CCACHE:  "1"
+
+  # ── Build identity ────────────────────────────────────────────────────────
+  # ckbuild.sh only sets these inside the IS_GP==1 block.
+  # Exporting them here ensures CI builds get a clean identity.
+  KBUILD_BUILD_USER: github-actions
+  KBUILD_BUILD_HOST: floppy-ci
+
+# ─────────────────────────────────────────────────────────────────────────────
+# PHASE 1 – CONFIGURE
+# ─────────────────────────────────────────────────────────────────────────────
+jobs:
+  configure:
+    name: ⚙️ Strategy Matrix
+    runs-on: ubuntu-22.04
+    outputs:
+      matrix:   ${{ steps.set-matrix.outputs.matrix }}
+      compiler: ${{ steps.set-vars.outputs.compiler }}
+
+    steps:
+      - name: Compute Build Matrix
+        id: set-matrix
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            TARGET="${{ inputs.build_target }}"
+          else
+            TARGET="separate"
+          fi
+
+          echo "::group::Target Resolution"
+          echo "Event  : ${{ github.event_name }}"
+          echo "Target : $TARGET"
+
+          case "$TARGET" in
+            unified)  DEVICES='["mitrinket"]' ;;
+            separate) DEVICES='["ginkgo","laurel_sprout"]' ;;
+            ginkgo)   DEVICES='["ginkgo"]' ;;
+            laurel)   DEVICES='["laurel_sprout"]' ;;
+            *)        DEVICES='["ginkgo","laurel_sprout"]' ;;
+          esac
+          echo "::endgroup::"
+
+          echo "matrix={\"device\":$DEVICES,\"variant\":[\"Vanilla\",\"KSUNext\",\"SukiSU\",\"RKSU\"]}" \
+            >> "$GITHUB_OUTPUT"
+
+      - name: Resolve Compiler Label
+        id: set-vars
+        run: |
+          echo "compiler=${{ inputs.compiler_type || 'aosp_clang' }}" >> "$GITHUB_OUTPUT"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# PHASE 2 – BUILD  (device × variant matrix)
+# ─────────────────────────────────────────────────────────────────────────────
+  build:
+    name: ${{ matrix.device }} • ${{ matrix.variant }}
+    needs: configure
+    runs-on: ubuntu-22.04
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJson(needs.configure.outputs.matrix) }}
+
+    steps:
+
+      # ── 1. Free disk space ────────────────────────────────────────────────
+      - name: 🗑️ Free Disk Space
+        run: |
+          echo "── Disk before ──"; df -h /
+          sudo rm -rf \
+            /usr/share/dotnet            \
+            /usr/local/lib/android       \
+            /opt/ghc                     \
+            /opt/hostedtoolcache/CodeQL  \
+            /usr/local/share/boost       \
+            /usr/lib/jvm                 \
+            "${AGENT_TOOLSDIRECTORY}"
+          sudo apt-get clean
+          echo "── Disk after ──"; df -h /
+
+      # ── 2. Fix swap ───────────────────────────────────────────────────────
+      # WHY "Text file busy" HAPPENS:
+      #   ubuntu-22.04 runners come with a 4 GB /swapfile already active
+      #   (swapon'd at boot). fallocate refuses to touch an active swap file.
+      # FIX:
+      #   swapoff -a first → removes the "busy" lock → delete → recreate on /mnt
+      - name: 🧠 Configure Swap (12 GB)
+        run: |
+          sudo swapoff -a
+          sudo rm -f /swapfile /mnt/swapfile
+
+          sudo fallocate -l 12G /mnt/swapfile \
+            || sudo dd if=/dev/zero of=/mnt/swapfile bs=1M count=12288 status=progress
+
+          sudo chmod 600   /mnt/swapfile
+          sudo mkswap      /mnt/swapfile
+          sudo swapon      /mnt/swapfile
+          free -h; swapon --show
+
+      # ── 3. Checkout kernel into kernel/ subdir ────────────────────────────
+      # MUST use path: kernel  so that:
+      #   • working-directory: kernel passes ckbuild.sh's `[[ ! -d drivers ]]` check
+      #   • ../bot_token from inside kernel/ resolves to $WP/bot_token  ✓
+      #   • do_build.sh's WP=${WP:-$(realpath "${PWD}/../")} = workspace root  ✓
+      - name: 📥 Checkout Kernel Source
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+          path: kernel
+
+      # ── 4. Write credential files ─────────────────────────────────────────
+      # Original ckbuild.sh: TELEGRAM_BOT_TOKEN="$(cat ../bot_token)"
+      # Running from kernel/ → ../bot_token = $WP/bot_token
+      - name: 🔑 Write Credential Files
+        run: |
+          printf '%s' "${{ secrets.TELEGRAM_BOT_TOKEN }}"    > "$WP/bot_token"
+          printf '%s' "${{ secrets.TELEGRAM_CHAT_ID }}"      > "$WP/chat"
+          printf '%s' "${{ secrets.TELEGRAM_TEST_CHAT_ID }}" > "$WP/chat_test"
+
+      # ── 5. Install dependencies ───────────────────────────────────────────
+      # Mirrors the packages install_deps_deb() installs, plus a few extras
+      # the CI environment needs (jq, zstd, device-tree-compiler).
+      - name: 📦 Install Dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            bc bison binutils build-essential ca-certificates ccache cpio \
+            curl device-tree-compiler file flex git jq kmod \
+            libelf-dev libssl-dev libtinfo5 lz4 lzop python3 wget zip zstd
+
+      # ── 6. Resolve toolchain URL ──────────────────────────────────────────
+      - name: 🔗 Resolve Toolchain URL
+        id: toolchain-url
+        env:
+          COMPILER_TYPE: ${{ needs.configure.outputs.compiler }}
+          GH_TOKEN:      ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          echo "::group::Resolving URL for $COMPILER_TYPE"
+          if [ "$COMPILER_TYPE" = "llvm_latest" ]; then
+            SRC="https://raw.githubusercontent.com/PurrrsLitterbox/LLVM-weekly/main/latestlink.txt"
+            for i in 1 2 3 4 5; do
+              LINK=$(curl -fsSL "$SRC" 2>/dev/null | tr -d '[:space:]')
+              [ -n "$LINK" ] && break
+              sleep 3
+            done
+          else
+            # Authenticated to avoid 60 req/hr anon rate limit
+            API="https://api.github.com/repos/bachnxuan/aosp_clang_mirror/releases/latest"
+            LINK=$(curl -fsSL -H "Authorization: Bearer $GH_TOKEN" "$API" \
+              | jq -r '.assets[] | select(.name | test("clang-r.*\\.tar\\.gz")) | .browser_download_url' \
+              | head -n1)
+          fi
+
+          if [ -z "$LINK" ] || [ "$LINK" = "null" ]; then
+            echo "::error::Failed to resolve toolchain URL for $COMPILER_TYPE"
+            exit 1
+          fi
+
+          echo "URL: $LINK"
+          CACHE_KEY=$(printf '%s' "$LINK" | sha256sum | cut -c1-16)
+          echo "TOOLCHAIN_URL=$LINK"   >> "$GITHUB_ENV"
+          echo "cache_key=$CACHE_KEY" >> "$GITHUB_OUTPUT"
+          echo "::endgroup::"
+
+      # ── 7. Cache toolchain ────────────────────────────────────────────────
+      - name: 💾 Cache Toolchain
+        id: cache-tc
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.TOOLCHAIN_DIR }}
+          key: tc-${{ needs.configure.outputs.compiler }}-${{ steps.toolchain-url.outputs.cache_key }}
+          restore-keys: |
+            tc-${{ needs.configure.outputs.compiler }}-
+
+      # ── 8. Install toolchain (cache miss only) ────────────────────────────
+      # Handles gzip and zstd archives; auto-detects nested folder structure.
+      - name: 🛠️ Install Toolchain
+        if: steps.cache-tc.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p "$TOOLCHAIN_DIR" tc_tmp
+          cd tc_tmp
+
+          wget --tries=5 --timeout=90 -qO tc_archive "$TOOLCHAIN_URL"
+
+          FTYPE=$(file tc_archive)
+          if   echo "$FTYPE" | grep -q "Zstandard"; then tar -I zstd -xf tc_archive
+          elif echo "$FTYPE" | grep -q "gzip";      then tar -xzf tc_archive
+          else                                            tar -xf  tc_archive
+          fi
+
+          # Find bin/clang regardless of how the archive nests its folders
+          BIN=$(find . -type f -name "clang" -path "*/bin/clang" | head -n1)
+          if [ -z "$BIN" ]; then
+            echo "::error::bin/clang not found in archive"
+            exit 1
+          fi
+          ROOT=$(dirname "$(dirname "$BIN")")
+          mv "$ROOT"/* "$TOOLCHAIN_DIR/"
+
+          cd ..
+          rm -rf tc_tmp
+
+      # ── 9. Verify toolchain ───────────────────────────────────────────────
+      - name: ✅ Verify Toolchain
+        run: |
+          "$TOOLCHAIN_DIR/bin/clang" --version | head -n1
+
+      # ── 10. Restore ccache ────────────────────────────────────────────────
+      - name: ♻️ Restore CCache
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.CCACHE_DIR }}
+          key: ccache-${{ matrix.device }}-${{ matrix.variant }}-${{ github.sha }}
+          restore-keys: |
+            ccache-${{ matrix.device }}-${{ matrix.variant }}-
+            ccache-${{ matrix.device }}-
+
+      # ── 11. Configure ccache ──────────────────────────────────────────────
+      # Original ckbuild.sh only runs `ccache -M` inside the IS_GP==1 block.
+      # On CI IS_GP=0, so we configure it here before the build runs.
+      # CCACHE_DIR is already exported globally so ckbuild.sh inherits it.
+      - name: ⚡ Configure CCache
+        run: |
+          mkdir -p "$CCACHE_DIR"
+          ccache --set-config=max_size="$CCACHE_SIZE" 2>/dev/null \
+            || ccache -M "$CCACHE_SIZE"
+          ccache --set-config=compression=true       2>/dev/null || true
+          ccache --set-config=compression_level=1    2>/dev/null || true
+          ccache --set-config=hash_dir=false         2>/dev/null || true
+          ccache --set-config=sloppiness=include_file_ctime,include_file_mtime 2>/dev/null || true
+          ccache -z
+
+      # ── 12. Build ─────────────────────────────────────────────────────────
+      # working-directory: kernel  is critical – see checkout note above.
+      # All env vars (WP, CLANG_TYPE, CUST_DIR, CCACHE_DIR, KBUILD_*) are
+      # already set globally and inherited here.
+      - name: 🔨 Build Kernel
+        working-directory: kernel
+        run: |
+          case "${{ matrix.variant }}" in
+            Vanilla) FLAG=""  ;;
+            KSUNext) FLAG="k" ;;
+            SukiSU)  FLAG="s" ;;
+            RKSU)    FLAG="u" ;;
+          esac
+
+          echo "::group::Build Manifest"
+          echo "Device   : ${{ matrix.device }}"
+          echo "Variant  : ${{ matrix.variant }}  (flag='${FLAG}')"
+          echo "Compiler : $CLANG_TYPE  →  $CUST_DIR"
+          echo "WP       : $WP"
+          echo "::endgroup::"
+
+          ulimit -s unlimited
+          chmod +x do_build.sh ckbuild.sh
+
+          set -o pipefail
+          ./do_build.sh "${{ matrix.device }}" "$FLAG" 2>&1 \
+            | tee "$GITHUB_WORKSPACE/build-${{ matrix.device }}-${{ matrix.variant }}.log"
+
+      # ── 13. CCache stats ──────────────────────────────────────────────────
+      - name: 📊 CCache Statistics
+        if: always()
+        run: ccache -s
+
+      # ── 14. Process logs ──────────────────────────────────────────────────
+      - name: 🔍 Process Build Log
+        if: always()
+        run: |
+          LOG="$GITHUB_WORKSPACE/build-${{ matrix.device }}-${{ matrix.variant }}.log"
+          [ -f "$LOG" ] || exit 0
+          grep -nEi 'error:'   "$LOG" > "$GITHUB_WORKSPACE/errors.log"   || true
+          grep -nEi 'warning:' "$LOG" > "$GITHUB_WORKSPACE/warnings.log" || true
+
+      # ── 15. Stage artifacts ───────────────────────────────────────────────
+      # Original ckbuild.sh: ZIP_PATH="$WP/Floppy_${FK_VER}-${CK_TYPE}-${CODENAME}-${DATE}.zip"
+      # With WP=workspace root, zips land at $GITHUB_WORKSPACE/Floppy_*.zip
+      - name: 📦 Stage Kernel ZIP
+        id: stage
+        if: success()
+        run: |
+          mkdir -p release_artifacts
+          shopt -s nullglob
+          ZIPS=("$WP"/Floppy_*.zip)
+          if [ ${#ZIPS[@]} -eq 0 ]; then
+            echo "::warning::No Floppy_*.zip found under $WP"
+            echo "zip_found=false" >> "$GITHUB_OUTPUT"
+          else
+            cp -v "${ZIPS[@]}" release_artifacts/
+            echo "zip_found=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      # ── 16. Upload logs ───────────────────────────────────────────────────
+      - name: 📋 Upload Logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: logs-${{ matrix.device }}-${{ matrix.variant }}-${{ github.run_number }}
+          path: |
+            build-${{ matrix.device }}-${{ matrix.variant }}.log
+            errors.log
+            warnings.log
+          if-no-files-found: ignore
+          retention-days: 7
+
+      # ── 17. Upload kernel ZIP ─────────────────────────────────────────────
+      - name: 📤 Upload Kernel ZIP
+        if: steps.stage.outputs.zip_found == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: kernel-${{ matrix.device }}-${{ matrix.variant }}-${{ github.run_number }}
+          path: release_artifacts/*.zip
+          compression-level: 0
+          if-no-files-found: error
+
+# ─────────────────────────────────────────────────────────────────────────────
+# PHASE 3 – RELEASE
+# ─────────────────────────────────────────────────────────────────────────────
+  create_release:
+    name: 🚀 Publish Release
+    needs: build
+    runs-on: ubuntu-22.04
+    if: |
+      success() &&
+      (
+        (github.event_name == 'workflow_dispatch' && inputs.create_release == 'true') ||
+        startsWith(github.ref, 'refs/tags/')
+      )
+
+    steps:
+      - name: 📥 Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: 📦 Download All Kernel ZIPs
+        uses: actions/download-artifact@v4
+        with:
+          pattern: kernel-*-${{ github.run_number }}
+          merge-multiple: true
+          path: artifacts
+
+      - name: 🏷️ Rename Assets
+        run: |
+          mkdir -p final_assets
+          DATE=$(date -u +%Y.%m.%d)
+
+          if [ -z "$(ls -A artifacts 2>/dev/null)" ]; then
+            echo "::error::No kernel artifacts found"
+            exit 1
+          fi
+
+          for f in artifacts/*.zip; do
+            mv "$f" "final_assets/${DATE}-R${{ github.run_number }}-$(basename "$f")"
+          done
+
+          ls -lh final_assets/
+
+      - name: 🚀 Create GitHub Release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="FloppyKernel-R${{ github.run_number }}-$(date -u +%Y%m%d)"
+          TITLE="FloppyKernel CI • Build #${{ github.run_number }}"
+          NOTES="## Automated Build
+
+          | Field | Value |
+          |---|---|
+          | Date | $(date -u '+%Y-%m-%d %H:%M UTC') |
+          | Target | \`${{ inputs.build_target || 'push-event' }}\` |
+          | Compiler | \`${{ inputs.compiler_type || 'aosp_clang' }}\` |
+          | Commit | \`${{ github.sha }}\` |
+          | Run | [\`#${{ github.run_number }}\`](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}) |
+
+          Variants: Vanilla · KSUNext · SukiSU · RKSU"
+
+          gh release create "$TAG" \
+            --title  "$TITLE" \
+            --notes  "$NOTES" \
+            --target "${{ github.sha }}" \
+            final_assets/*.zip
