@@ -192,27 +192,45 @@ jobs:
             curl device-tree-compiler file flex git jq kmod \
             libelf-dev libssl-dev libtinfo5 lz4 lzop python3 wget zip zstd
 
-      # ── 6. Resolve toolchain URL ──────────────────────────────────────────
+     # ── 6. Resolve toolchain URL ──────────────────────────────────────────
       - name: 🔗 Resolve Toolchain URL
         id: toolchain-url
         env:
           COMPILER_TYPE: ${{ needs.configure.outputs.compiler }}
           GH_TOKEN:      ${{ secrets.GITHUB_TOKEN }}
         run: |
+          set -euo pipefail
           echo "::group::Resolving URL for $COMPILER_TYPE"
+          
           if [ "$COMPILER_TYPE" = "llvm_latest" ]; then
             SRC="https://raw.githubusercontent.com/PurrrsLitterbox/LLVM-weekly/main/latestlink.txt"
             for i in 1 2 3 4 5; do
-              LINK=$(curl -fsSL "$SRC" 2>/dev/null | tr -d '[:space:]')
-              [ -n "$LINK" ] && break
-              sleep 3
+              LINK=$(curl -fsSL --retry 3 --retry-delay 2 "$SRC" 2>/dev/null | tr -d '[:space:]')
+              if [ -n "$LINK" ] && [[ "$LINK" == http* ]]; then
+                break
+              fi
+              echo "Retry $i/5..."
+              sleep 5
             done
           else
-            # Authenticated to avoid 60 req/hr anon rate limit
-            API="https://api.github.com/repos/bachnxuan/aosp_clang_mirror/releases/latest"
-            LINK=$(curl -fsSL -H "Authorization: Bearer $GH_TOKEN" "$API" \
-              | jq -r '.assets[] | select(.name | test("clang-r.*\\.tar\\.gz")) | .browser_download_url' \
-              | head -n1)
+            # FIXED: Use proper API endpoint with Accept header and correct jq parsing
+            API="https://api.github.com/repos/Beethoven/aosp_clang_mirror/releases/latest"
+            API_RESP=$(curl -fsSL --retry 3 \
+              -H "Authorization: Bearer $GH_TOKEN" \
+              -H "Accept: application/vnd.github+json" \
+              -H "X-GitHub-Api-Version: 2022-11-28" \
+              "$API")
+            
+            # More robust jq: try multiple patterns, fallback to first .tar.gz/.tar.zst
+            LINK=$(echo "$API_RESP" | jq -r '
+              .assets[] | 
+              select(.name | test("clang-r[0-9a-f]+\\.(tar\\.gz|tar\\.zst|tgz)$"; "i")) | 
+              .browser_download_url' | head -n1)
+            
+            # Fallback: if no match, take first tar archive
+            if [ -z "$LINK" ] || [ "$LINK" = "null" ]; then
+              LINK=$(echo "$API_RESP" | jq -r '.assets[] | select(.name | endswith(".tar.gz") or endswith(".tar.zst")) | .browser_download_url' | head -n1)
+            fi
           fi
 
           if [ -z "$LINK" ] || [ "$LINK" = "null" ]; then
@@ -237,32 +255,64 @@ jobs:
             tc-${{ needs.configure.outputs.compiler }}-
 
       # ── 8. Install toolchain (cache miss only) ────────────────────────────
-      # Handles gzip and zstd archives; auto-detects nested folder structure.
+      # FIXED: Proper archive extraction preserving directory structure
       - name: 🛠️ Install Toolchain
         if: steps.cache-tc.outputs.cache-hit != 'true'
         run: |
-          mkdir -p "$TOOLCHAIN_DIR" tc_tmp
-          cd tc_tmp
-
-          wget --tries=5 --timeout=90 -qO tc_archive "$TOOLCHAIN_URL"
-
-          FTYPE=$(file tc_archive)
-          if   echo "$FTYPE" | grep -q "Zstandard"; then tar -I zstd -xf tc_archive
-          elif echo "$FTYPE" | grep -q "gzip";      then tar -xzf tc_archive
-          else                                            tar -xf  tc_archive
-          fi
-
-          # Find bin/clang regardless of how the archive nests its folders
-          BIN=$(find . -type f -name "clang" -path "*/bin/clang" | head -n1)
-          if [ -z "$BIN" ]; then
-            echo "::error::bin/clang not found in archive"
+          set -euo pipefail
+          mkdir -p "$TOOLCHAIN_DIR"
+          TC_TMP=$(mktemp -d)
+          cd "$TC_TMP"
+          
+          echo "Downloading toolchain..."
+          wget --tries=5 --timeout=120 --progress=dot:giga -O tc_archive "$TOOLCHAIN_URL"
+          
+          if [ ! -f tc_archive ] || [ ! -s tc_archive ]; then
+            echo "::error::Download failed or file is empty"
             exit 1
           fi
-          ROOT=$(dirname "$(dirname "$BIN")")
-          mv "$ROOT"/* "$TOOLCHAIN_DIR/"
-
-          cd ..
-          rm -rf tc_tmp
+          
+          echo "Detecting archive format..."
+          FTYPE=$(file -b tc_archive)
+          echo "File type: $FTYPE"
+          
+          # Extract based on actual format
+          if echo "$FTYPE" | grep -qi "zstandard"; then
+            tar --zstd -xf tc_archive -C extracted/ 2>/dev/null || tar -I zstd -xf tc_archive -C extracted/
+          elif echo "$FTYPE" | grep -qi "gzip"; then
+            mkdir -p extracted && tar -xzf tc_archive -C extracted/
+          else
+            mkdir -p extracted && tar -xf tc_archive -C extracted/
+          fi
+          
+          # Find the actual toolchain root (where bin/clang lives)
+          echo "Searching for clang binary..."
+          BIN=$(find extracted -type f -name "clang" | grep "/bin/clang$" | head -n1)
+          
+          if [ -z "$BIN" ]; then
+            echo "::error::bin/clang not found in archive. Contents:"
+            find extracted -maxdepth 3 -type d | head -20
+            exit 1
+          fi
+          
+          # Get the directory containing bin/
+          EXTRACTED_ROOT=$(dirname "$(dirname "$BIN")")
+          echo "Found toolchain root: $EXTRACTED_ROOT"
+          
+          # Clean install: remove old contents, copy new ones preserving structure
+          rm -rf "${TOOLCHAIN_DIR:?}"/*
+          cp -a "$EXTRACTED_ROOT"/* "$TOOLCHAIN_DIR/"
+          
+          # Verify
+          if [ ! -f "$TOOLCHAIN_DIR/bin/clang" ]; then
+            echo "::error::Installation verification failed"
+            ls -la "$TOOLCHAIN_DIR/"
+            exit 1
+          fi
+          
+          cd /
+          rm -rf "$TC_TMP"
+          echo "Toolchain installed successfully"
 
       # ── 9. Verify toolchain ───────────────────────────────────────────────
       - name: ✅ Verify Toolchain
