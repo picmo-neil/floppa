@@ -1,7 +1,5 @@
 name: FloppyKernel – Build Matrix
 
-
-
 on:
   workflow_dispatch:
     inputs:
@@ -11,10 +9,23 @@ on:
         default: 'separate'
         type: choice
         options:
-          - unified   # Mitrinket (Redmi Note 8/8T + Mi A3 unified)
-          - separate  # Ginkgo + Laurel separate builds
+          - separate  # Ginkgo + Laurel as separate jobs
+          - unified   # Mitrinket unified build
           - ginkgo    # Redmi Note 8/8T only
           - laurel    # Xiaomi Mi A3 only
+
+      build_variant:
+        description: 'Build Variant(s)'
+        required: true
+        default: 'all'
+        type: choice
+        options:
+          - all      # Vanilla + KSUNext + SukiSU + RKSU
+          - vanilla  # Vanilla only
+          - ksu      # KernelSU-Next only
+          - sukisu   # ReSukiSU-SUSFS only
+          - rksu     # RKSU only
+
       compiler_type:
         description: 'Compiler Toolchain'
         required: true
@@ -23,6 +34,7 @@ on:
         options:
           - aosp_clang   # AOSP Clang mirror (stable)
           - llvm_latest  # Bleeding-edge upstream LLVM
+
       create_release:
         description: 'Publish GitHub Release'
         required: false
@@ -45,30 +57,24 @@ permissions:
   contents: write
 
 # ─────────────────────────────────────────────────────────────────────────────
-# GLOBAL ENV  –  every job/step inherits these
+# GLOBAL ENV – every job/step inherits these
 # ─────────────────────────────────────────────────────────────────────────────
 env:
-  # ── Layout ────────────────────────────────────────────────────────────────
-  # WP must be workspace root so that ckbuild.sh's `cat ../x` reads from here.
+  # WP must be workspace root so that ckbuild.sh's `cat ../x` resolves correctly.
   WP: ${{ github.workspace }}
 
-  # ── Toolchain ─────────────────────────────────────────────────────────────
-  # CLANG_TYPE=custom  tells original ckbuild.sh to use CUST_DIR as-is and
-  # skip re-downloading.  CUST_DIR must match where we install the toolchain.
+  # CLANG_TYPE=custom tells ckbuild.sh to skip re-downloading and use CUST_DIR.
   TOOLCHAIN_DIR: ${{ github.workspace }}/toolchains/custom-toolchain
   CLANG_TYPE: custom
   CUST_DIR:   ${{ github.workspace }}/toolchains/custom-toolchain
 
-  # ── ccache ────────────────────────────────────────────────────────────────
-  # ckbuild.sh only sets CCACHE_DIR when IS_GP==1 (Gitpod). On CI IS_GP=0,
-  # so we export it here – the script inherits it and ccache works correctly.
+  # ckbuild.sh only sets CCACHE_DIR when IS_GP==1 (Gitpod).
+  # Exporting here ensures CI (IS_GP=0) also gets a valid ccache directory.
   CCACHE_DIR:  ${{ github.workspace }}/.ccache
   CCACHE_SIZE: "12G"
   USE_CCACHE:  "1"
 
-  # ── Build identity ────────────────────────────────────────────────────────
-  # ckbuild.sh only sets these inside the IS_GP==1 block.
-  # Exporting them here ensures CI builds get a clean identity.
+  # ckbuild.sh only sets KBUILD_* inside IS_GP==1; export here for CI identity.
   KBUILD_BUILD_USER: github-actions
   KBUILD_BUILD_HOST: floppy-ci
 
@@ -82,21 +88,28 @@ jobs:
     outputs:
       matrix:   ${{ steps.set-matrix.outputs.matrix }}
       compiler: ${{ steps.set-vars.outputs.compiler }}
+      variants: ${{ steps.set-matrix.outputs.variants }}
 
     steps:
       - name: Compute Build Matrix
         id: set-matrix
         run: |
+          # ── Resolve trigger source ──────────────────────────────────────────
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             TARGET="${{ inputs.build_target }}"
+            VARIANT_INPUT="${{ inputs.build_variant }}"
           else
+            # push event: build all devices × all variants
             TARGET="separate"
+            VARIANT_INPUT="all"
           fi
 
-          echo "::group::Target Resolution"
-          echo "Event  : ${{ github.event_name }}"
-          echo "Target : $TARGET"
+          echo "::group::Matrix Resolution"
+          echo "Event   : ${{ github.event_name }}"
+          echo "Target  : $TARGET"
+          echo "Variant : $VARIANT_INPUT"
 
+          # ── Device list ─────────────────────────────────────────────────────
           case "$TARGET" in
             unified)  DEVICES='["mitrinket"]' ;;
             separate) DEVICES='["ginkgo","laurel_sprout"]' ;;
@@ -104,10 +117,24 @@ jobs:
             laurel)   DEVICES='["laurel_sprout"]' ;;
             *)        DEVICES='["ginkgo","laurel_sprout"]' ;;
           esac
+
+          # ── Variant list ────────────────────────────────────────────────────
+          case "$VARIANT_INPUT" in
+            all)     VARIANTS='["Vanilla","KSUNext","SukiSU","RKSU"]' ;;
+            vanilla) VARIANTS='["Vanilla"]' ;;
+            ksu)     VARIANTS='["KSUNext"]' ;;
+            sukisu)  VARIANTS='["SukiSU"]' ;;
+            rksu)    VARIANTS='["RKSU"]' ;;
+            *)       VARIANTS='["Vanilla","KSUNext","SukiSU","RKSU"]' ;;
+          esac
+
+          echo "Devices  : $DEVICES"
+          echo "Variants : $VARIANTS"
           echo "::endgroup::"
 
-          echo "matrix={\"device\":$DEVICES,\"variant\":[\"Vanilla\",\"KSUNext\",\"SukiSU\",\"RKSU\"]}" \
-            >> "$GITHUB_OUTPUT"
+          echo "matrix={\"device\":$DEVICES,\"variant\":$VARIANTS}" >> "$GITHUB_OUTPUT"
+          # Also expose variants string for the release notes step
+          echo "variants=$VARIANTS" >> "$GITHUB_OUTPUT"
 
       - name: Resolve Compiler Label
         id: set-vars
@@ -127,7 +154,7 @@ jobs:
 
     steps:
 
-      # ── 1. Free disk space ────────────────────────────────────────────────
+      # ── 1. Free disk space ──────────────────────────────────────────────────
       - name: 🗑️ Free Disk Space
         run: |
           echo "── Disk before ──"; df -h /
@@ -138,16 +165,13 @@ jobs:
             /opt/hostedtoolcache/CodeQL  \
             /usr/local/share/boost       \
             /usr/lib/jvm                 \
-            "${AGENT_TOOLSDIRECTORY}"
+            "${AGENT_TOOLSDIRECTORY:-}"
           sudo apt-get clean
           echo "── Disk after ──"; df -h /
 
-      # ── 2. Fix swap ───────────────────────────────────────────────────────
-      # WHY "Text file busy" HAPPENS:
-      #   ubuntu-22.04 runners come with a 4 GB /swapfile already active
-      #   (swapon'd at boot). fallocate refuses to touch an active swap file.
-      # FIX:
-      #   swapoff -a first → removes the "busy" lock → delete → recreate on /mnt
+      # ── 2. Fix swap ─────────────────────────────────────────────────────────
+      # ubuntu-22.04 runners boot with a 4 GB /swapfile already swapon'd.
+      # fallocate refuses to touch an active swap file → swapoff first.
       - name: 🧠 Configure Swap (12 GB)
         run: |
           sudo swapoff -a
@@ -156,34 +180,30 @@ jobs:
           sudo fallocate -l 12G /mnt/swapfile \
             || sudo dd if=/dev/zero of=/mnt/swapfile bs=1M count=12288 status=progress
 
-          sudo chmod 600   /mnt/swapfile
-          sudo mkswap      /mnt/swapfile
-          sudo swapon      /mnt/swapfile
+          sudo chmod 600  /mnt/swapfile
+          sudo mkswap     /mnt/swapfile
+          sudo swapon     /mnt/swapfile
           free -h; swapon --show
 
-      # ── 3. Checkout kernel into kernel/ subdir ────────────────────────────
-      # MUST use path: kernel  so that:
-      #   • working-directory: kernel passes ckbuild.sh's `[[ ! -d drivers ]]` check
-      #   • ../bot_token from inside kernel/ resolves to $WP/bot_token  ✓
-      #   • do_build.sh's WP=${WP:-$(realpath "${PWD}/../")} = workspace root  ✓
+      # ── 3. Checkout kernel ──────────────────────────────────────────────────
+      # path: kernel  so that:
+      #   • `[[ ! -d drivers ]]` check in ckbuild.sh passes
+      #   • ../bot_token from inside kernel/ resolves to $WP/bot_token
+      #   • do_build.sh's WP=${WP:-$(realpath "${PWD}/../")} = workspace root
       - name: 📥 Checkout Kernel Source
         uses: actions/checkout@v4
         with:
           fetch-depth: 1
           path: kernel
 
-      # ── 4. Write credential files ─────────────────────────────────────────
-      # Original ckbuild.sh: TELEGRAM_BOT_TOKEN="$(cat ../bot_token)"
-      # Running from kernel/ → ../bot_token = $WP/bot_token
+      # ── 4. Write credential files ───────────────────────────────────────────
       - name: 🔑 Write Credential Files
         run: |
           printf '%s' "${{ secrets.TELEGRAM_BOT_TOKEN }}"    > "$WP/bot_token"
           printf '%s' "${{ secrets.TELEGRAM_CHAT_ID }}"      > "$WP/chat"
           printf '%s' "${{ secrets.TELEGRAM_TEST_CHAT_ID }}" > "$WP/chat_test"
 
-      # ── 5. Install dependencies ───────────────────────────────────────────
-      # Mirrors the packages install_deps_deb() installs, plus a few extras
-      # the CI environment needs (jq, zstd, device-tree-compiler).
+      # ── 5. Install dependencies ─────────────────────────────────────────────
       - name: 📦 Install Dependencies
         run: |
           sudo apt-get update -qq
@@ -192,7 +212,7 @@ jobs:
             curl device-tree-compiler file flex git jq kmod \
             libelf-dev libssl-dev libtinfo5 lz4 lzop python3 wget zip zstd
 
-     # ── 6. Resolve toolchain URL ──────────────────────────────────────────
+      # ── 6. Resolve toolchain URL ────────────────────────────────────────────
       - name: 🔗 Resolve Toolchain URL
         id: toolchain-url
         env:
@@ -201,7 +221,7 @@ jobs:
         run: |
           set -euo pipefail
           echo "::group::Resolving URL for $COMPILER_TYPE"
-          
+
           if [ "$COMPILER_TYPE" = "llvm_latest" ]; then
             SRC="https://raw.githubusercontent.com/PurrrsLitterbox/LLVM-weekly/main/latestlink.txt"
             for i in 1 2 3 4 5; do
@@ -213,38 +233,39 @@ jobs:
               sleep 5
             done
           else
-            # FIXED: Use proper API endpoint with Accept header and correct jq parsing
+            # aosp_clang: fetch from GitHub releases mirror
             API="https://api.github.com/repos/Beethoven/aosp_clang_mirror/releases/latest"
             API_RESP=$(curl -fsSL --retry 3 \
               -H "Authorization: Bearer $GH_TOKEN" \
               -H "Accept: application/vnd.github+json" \
               -H "X-GitHub-Api-Version: 2022-11-28" \
               "$API")
-            
-            # More robust jq: try multiple patterns, fallback to first .tar.gz/.tar.zst
+
+            # Prefer clang-r*.tar.{gz,zst}; fall back to any tar archive
             LINK=$(echo "$API_RESP" | jq -r '
-              .assets[] | 
-              select(.name | test("clang-r[0-9a-f]+\\.(tar\\.gz|tar\\.zst|tgz)$"; "i")) | 
+              .assets[] |
+              select(.name | test("clang-r[0-9a-f]+\\.(tar\\.gz|tar\\.zst|tgz)$"; "i")) |
               .browser_download_url' | head -n1)
-            
-            # Fallback: if no match, take first tar archive
+
             if [ -z "$LINK" ] || [ "$LINK" = "null" ]; then
-              LINK=$(echo "$API_RESP" | jq -r '.assets[] | select(.name | endswith(".tar.gz") or endswith(".tar.zst")) | .browser_download_url' | head -n1)
+              LINK=$(echo "$API_RESP" | jq -r \
+                '.assets[] | select(.name | endswith(".tar.gz") or endswith(".tar.zst")) | .browser_download_url' \
+                | head -n1)
             fi
           fi
 
-          if [ -z "$LINK" ] || [ "$LINK" = "null" ]; then
+          if [ -z "${LINK:-}" ] || [ "$LINK" = "null" ]; then
             echo "::error::Failed to resolve toolchain URL for $COMPILER_TYPE"
             exit 1
           fi
 
           echo "URL: $LINK"
           CACHE_KEY=$(printf '%s' "$LINK" | sha256sum | cut -c1-16)
-          echo "TOOLCHAIN_URL=$LINK"   >> "$GITHUB_ENV"
+          echo "TOOLCHAIN_URL=$LINK"  >> "$GITHUB_ENV"
           echo "cache_key=$CACHE_KEY" >> "$GITHUB_OUTPUT"
           echo "::endgroup::"
 
-      # ── 7. Cache toolchain ────────────────────────────────────────────────
+      # ── 7. Cache toolchain ──────────────────────────────────────────────────
       - name: 💾 Cache Toolchain
         id: cache-tc
         uses: actions/cache@v4
@@ -254,8 +275,17 @@ jobs:
           restore-keys: |
             tc-${{ needs.configure.outputs.compiler }}-
 
-      # ── 8. Install toolchain (cache miss only) ────────────────────────────
-      # FIXED: Proper archive extraction preserving directory structure
+      # ── 8. Install toolchain (cache miss only) ──────────────────────────────
+      #
+      # ROOT CAUSE OF PREVIOUS FAILURE:
+      #   `mkdir -p extracted` was only inside the elif/else branches.
+      #   The zstandard branch called `tar -C extracted/` on a directory
+      #   that did not yet exist, producing:
+      #       tar: extracted: Cannot open: No such file or directory
+      #
+      # FIX: `mkdir -p extracted` is now unconditional, before the
+      #   format-detection block, so all three branches find the directory.
+      #
       - name: 🛠️ Install Toolchain
         if: steps.cache-tc.outputs.cache-hit != 'true'
         run: |
@@ -263,63 +293,71 @@ jobs:
           mkdir -p "$TOOLCHAIN_DIR"
           TC_TMP=$(mktemp -d)
           cd "$TC_TMP"
-          
+
           echo "Downloading toolchain..."
           wget --tries=5 --timeout=120 --progress=dot:giga -O tc_archive "$TOOLCHAIN_URL"
-          
+
           if [ ! -f tc_archive ] || [ ! -s tc_archive ]; then
             echo "::error::Download failed or file is empty"
             exit 1
           fi
-          
+
           echo "Detecting archive format..."
           FTYPE=$(file -b tc_archive)
           echo "File type: $FTYPE"
-          
-          # Extract based on actual format
+
+          # ── FIX: create extraction directory unconditionally ────────────────
+          mkdir -p extracted
+
+          # Extract based on detected format
           if echo "$FTYPE" | grep -qi "zstandard"; then
-            tar --zstd -xf tc_archive -C extracted/ 2>/dev/null || tar -I zstd -xf tc_archive -C extracted/
+            # Try native --zstd first (GNU tar ≥ 1.31), fall back to -I zstd
+            tar --zstd -xf tc_archive -C extracted/ \
+              || tar -I zstd -xf tc_archive -C extracted/
           elif echo "$FTYPE" | grep -qi "gzip"; then
-            mkdir -p extracted && tar -xzf tc_archive -C extracted/
+            tar -xzf tc_archive -C extracted/
+          elif echo "$FTYPE" | grep -qi "bzip2"; then
+            tar -xjf tc_archive -C extracted/
+          elif echo "$FTYPE" | grep -qi "XZ"; then
+            tar -xJf tc_archive -C extracted/
           else
-            mkdir -p extracted && tar -xf tc_archive -C extracted/
+            tar -xf tc_archive -C extracted/
           fi
-          
-          # Find the actual toolchain root (where bin/clang lives)
+
+          # Find the toolchain root (directory that contains bin/clang)
           echo "Searching for clang binary..."
           BIN=$(find extracted -type f -name "clang" | grep "/bin/clang$" | head -n1)
-          
+
           if [ -z "$BIN" ]; then
-            echo "::error::bin/clang not found in archive. Contents:"
+            echo "::error::bin/clang not found in archive. Top-level contents:"
             find extracted -maxdepth 3 -type d | head -20
             exit 1
           fi
-          
-          # Get the directory containing bin/
+
           EXTRACTED_ROOT=$(dirname "$(dirname "$BIN")")
           echo "Found toolchain root: $EXTRACTED_ROOT"
-          
-          # Clean install: remove old contents, copy new ones preserving structure
+
+          # Install into TOOLCHAIN_DIR
           rm -rf "${TOOLCHAIN_DIR:?}"/*
-          cp -a "$EXTRACTED_ROOT"/* "$TOOLCHAIN_DIR/"
-          
+          cp -a "$EXTRACTED_ROOT"/. "$TOOLCHAIN_DIR/"
+
           # Verify
           if [ ! -f "$TOOLCHAIN_DIR/bin/clang" ]; then
-            echo "::error::Installation verification failed"
+            echo "::error::Installation verification failed – bin/clang missing"
             ls -la "$TOOLCHAIN_DIR/"
             exit 1
           fi
-          
+
           cd /
           rm -rf "$TC_TMP"
           echo "Toolchain installed successfully"
 
-      # ── 9. Verify toolchain ───────────────────────────────────────────────
+      # ── 9. Verify toolchain ─────────────────────────────────────────────────
       - name: ✅ Verify Toolchain
         run: |
           "$TOOLCHAIN_DIR/bin/clang" --version | head -n1
 
-      # ── 10. Restore ccache ────────────────────────────────────────────────
+      # ── 10. Restore ccache ──────────────────────────────────────────────────
       - name: ♻️ Restore CCache
         uses: actions/cache@v4
         with:
@@ -329,33 +367,37 @@ jobs:
             ccache-${{ matrix.device }}-${{ matrix.variant }}-
             ccache-${{ matrix.device }}-
 
-      # ── 11. Configure ccache ──────────────────────────────────────────────
-      # Original ckbuild.sh only runs `ccache -M` inside the IS_GP==1 block.
-      # On CI IS_GP=0, so we configure it here before the build runs.
-      # CCACHE_DIR is already exported globally so ckbuild.sh inherits it.
+      # ── 11. Configure ccache ────────────────────────────────────────────────
+      # ckbuild.sh only runs `ccache -M` inside IS_GP==1 (Gitpod).
+      # On CI IS_GP=0, so we configure it here; CCACHE_DIR is inherited.
       - name: ⚡ Configure CCache
         run: |
           mkdir -p "$CCACHE_DIR"
-          ccache --set-config=max_size="$CCACHE_SIZE" 2>/dev/null \
+          ccache --set-config=max_size="$CCACHE_SIZE"               2>/dev/null \
             || ccache -M "$CCACHE_SIZE"
-          ccache --set-config=compression=true       2>/dev/null || true
-          ccache --set-config=compression_level=1    2>/dev/null || true
-          ccache --set-config=hash_dir=false         2>/dev/null || true
-          ccache --set-config=sloppiness=include_file_ctime,include_file_mtime 2>/dev/null || true
+          ccache --set-config=compression=true                       2>/dev/null || true
+          ccache --set-config=compression_level=1                    2>/dev/null || true
+          ccache --set-config=hash_dir=false                         2>/dev/null || true
+          ccache --set-config=sloppiness=include_file_ctime,include_file_mtime \
+            2>/dev/null || true
           ccache -z
 
-      # ── 12. Build ─────────────────────────────────────────────────────────
-      # working-directory: kernel  is critical – see checkout note above.
-      # All env vars (WP, CLANG_TYPE, CUST_DIR, CCACHE_DIR, KBUILD_*) are
-      # already set globally and inherited here.
-      - name: 🔨 Build Kernel
+      # ── 12. Build ───────────────────────────────────────────────────────────
+      # working-directory: kernel is critical – ckbuild.sh checks for `drivers/`
+      # and resolves `../bot_token` from this directory.
+      - name: 🔨 Build Kernel (${{ matrix.device }} • ${{ matrix.variant }})
         working-directory: kernel
         run: |
+          # Map variant label to ckbuild.sh flag
           case "${{ matrix.variant }}" in
             Vanilla) FLAG=""  ;;
             KSUNext) FLAG="k" ;;
             SukiSU)  FLAG="s" ;;
             RKSU)    FLAG="u" ;;
+            *)
+              echo "::error::Unknown variant: ${{ matrix.variant }}"
+              exit 1
+              ;;
           esac
 
           echo "::group::Build Manifest"
@@ -368,16 +410,15 @@ jobs:
           ulimit -s unlimited
           chmod +x do_build.sh ckbuild.sh
 
-          set -o pipefail
           ./do_build.sh "${{ matrix.device }}" "$FLAG" 2>&1 \
             | tee "$GITHUB_WORKSPACE/build-${{ matrix.device }}-${{ matrix.variant }}.log"
 
-      # ── 13. CCache stats ──────────────────────────────────────────────────
+      # ── 13. CCache statistics ───────────────────────────────────────────────
       - name: 📊 CCache Statistics
         if: always()
         run: ccache -s
 
-      # ── 14. Process logs ──────────────────────────────────────────────────
+      # ── 14. Process logs ────────────────────────────────────────────────────
       - name: 🔍 Process Build Log
         if: always()
         run: |
@@ -386,9 +427,9 @@ jobs:
           grep -nEi 'error:'   "$LOG" > "$GITHUB_WORKSPACE/errors.log"   || true
           grep -nEi 'warning:' "$LOG" > "$GITHUB_WORKSPACE/warnings.log" || true
 
-      # ── 15. Stage artifacts ───────────────────────────────────────────────
-      # Original ckbuild.sh: ZIP_PATH="$WP/Floppy_${FK_VER}-${CK_TYPE}-${CODENAME}-${DATE}.zip"
-      # With WP=workspace root, zips land at $GITHUB_WORKSPACE/Floppy_*.zip
+      # ── 15. Stage artifacts ─────────────────────────────────────────────────
+      # ZIP_PATH in ckbuild.sh = "$WP/Floppy_${FK_VER}-${CK_TYPE}-${CODENAME}-${DATE}.zip"
+      # With WP = workspace root, zips land at $GITHUB_WORKSPACE/Floppy_*.zip
       - name: 📦 Stage Kernel ZIP
         id: stage
         if: success()
@@ -396,7 +437,7 @@ jobs:
           mkdir -p release_artifacts
           shopt -s nullglob
           ZIPS=("$WP"/Floppy_*.zip)
-          if [ ${#ZIPS[@]} -eq 0 ]; then
+          if [ "${#ZIPS[@]}" -eq 0 ]; then
             echo "::warning::No Floppy_*.zip found under $WP"
             echo "zip_found=false" >> "$GITHUB_OUTPUT"
           else
@@ -404,7 +445,7 @@ jobs:
             echo "zip_found=true" >> "$GITHUB_OUTPUT"
           fi
 
-      # ── 16. Upload logs ───────────────────────────────────────────────────
+      # ── 16. Upload logs ─────────────────────────────────────────────────────
       - name: 📋 Upload Logs
         if: always()
         uses: actions/upload-artifact@v4
@@ -417,7 +458,7 @@ jobs:
           if-no-files-found: ignore
           retention-days: 7
 
-      # ── 17. Upload kernel ZIP ─────────────────────────────────────────────
+      # ── 17. Upload kernel ZIP ───────────────────────────────────────────────
       - name: 📤 Upload Kernel ZIP
         if: steps.stage.outputs.zip_found == 'true'
         uses: actions/upload-artifact@v4
@@ -432,7 +473,7 @@ jobs:
 # ─────────────────────────────────────────────────────────────────────────────
   create_release:
     name: 🚀 Publish Release
-    needs: build
+    needs: [configure, build]
     runs-on: ubuntu-22.04
     if: |
       success() &&
@@ -476,17 +517,28 @@ jobs:
         run: |
           TAG="FloppyKernel-R${{ github.run_number }}-$(date -u +%Y%m%d)"
           TITLE="FloppyKernel CI • Build #${{ github.run_number }}"
+
+          # Build a human-readable variant list from what was actually requested
+          VARIANT_INPUT="${{ inputs.build_variant || 'all' }}"
+          case "$VARIANT_INPUT" in
+            all)     VARIANT_LABEL="Vanilla · KSUNext · SukiSU · RKSU" ;;
+            vanilla) VARIANT_LABEL="Vanilla" ;;
+            ksu)     VARIANT_LABEL="KSUNext" ;;
+            sukisu)  VARIANT_LABEL="SukiSU" ;;
+            rksu)    VARIANT_LABEL="RKSU" ;;
+            *)       VARIANT_LABEL="$VARIANT_INPUT" ;;
+          esac
+
           NOTES="## Automated Build
 
           | Field | Value |
           |---|---|
           | Date | $(date -u '+%Y-%m-%d %H:%M UTC') |
           | Target | \`${{ inputs.build_target || 'push-event' }}\` |
+          | Variant(s) | \`${VARIANT_LABEL}\` |
           | Compiler | \`${{ inputs.compiler_type || 'aosp_clang' }}\` |
           | Commit | \`${{ github.sha }}\` |
-          | Run | [\`#${{ github.run_number }}\`](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}) |
-
-          Variants: Vanilla · KSUNext · SukiSU · RKSU"
+          | Run | [\`#${{ github.run_number }}\`](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}) |"
 
           gh release create "$TAG" \
             --title  "$TITLE" \
