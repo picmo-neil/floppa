@@ -324,27 +324,48 @@ jobs:
             tar -xf tc_archive -C extracted/
           fi
 
-          # Find the toolchain root (directory that contains bin/clang)
+          # ── Locate the toolchain root ───────────────────────────────────────
+          # IMPORTANT: in all LLVM/Clang prebuilt archives bin/clang is a
+          # SYMLINK to the versioned binary (e.g. clang-20).
+          # `find -type f` never matches symlinks → always returns nothing.
+          # Fix: search for both regular files AND symlinks (-type f -o -type l).
           echo "Searching for clang binary..."
-          BIN=$(find extracted -type f -name "clang" | grep "/bin/clang$" | head -n1)
+          echo "Archive top-level layout:"
+          find extracted -maxdepth 3 | head -40 || true
+
+          # Primary: look for bin/clang (file or symlink)
+          BIN=$(find extracted \( -type f -o -type l \) -name "clang" \
+                | grep "/bin/clang$" | head -n1)
+
+          # Fallback: look for versioned binary bin/clang-NN (file or symlink)
+          if [ -z "$BIN" ]; then
+            BIN=$(find extracted \( -type f -o -type l \) \
+                  | grep -E "/bin/clang-[0-9]+$" | sort -t- -k2 -n | tail -n1)
+            if [ -n "$BIN" ]; then
+              echo "Note: no 'clang' symlink found; using versioned binary: $BIN"
+            fi
+          fi
 
           if [ -z "$BIN" ]; then
-            echo "::error::bin/clang not found in archive. Top-level contents:"
-            find extracted -maxdepth 3 -type d | head -20
+            echo "::error::No clang binary found anywhere in archive."
+            echo "Full file listing (files+links, maxdepth 5):"
+            find extracted -maxdepth 5 \( -type f -o -type l \) | head -60 || true
             exit 1
           fi
 
+          echo "Found clang at: $BIN"
           EXTRACTED_ROOT=$(dirname "$(dirname "$BIN")")
-          echo "Found toolchain root: $EXTRACTED_ROOT"
+          echo "Toolchain root : $EXTRACTED_ROOT"
 
           # Install into TOOLCHAIN_DIR
           rm -rf "${TOOLCHAIN_DIR:?}"/*
           cp -a "$EXTRACTED_ROOT"/. "$TOOLCHAIN_DIR/"
 
-          # Verify
-          if [ ! -f "$TOOLCHAIN_DIR/bin/clang" ]; then
-            echo "::error::Installation verification failed – bin/clang missing"
-            ls -la "$TOOLCHAIN_DIR/"
+          # Verify (accept symlink OR regular file)
+          if [ ! -e "$TOOLCHAIN_DIR/bin/clang" ] && \
+             ! ls "$TOOLCHAIN_DIR/bin/clang-"[0-9]* >/dev/null 2>&1; then
+            echo "::error::Installation verification failed – no clang binary in $TOOLCHAIN_DIR/bin/"
+            ls -la "$TOOLCHAIN_DIR/bin/" | head -20 || true
             exit 1
           fi
 
@@ -355,7 +376,19 @@ jobs:
       # ── 9. Verify toolchain ─────────────────────────────────────────────────
       - name: ✅ Verify Toolchain
         run: |
-          "$TOOLCHAIN_DIR/bin/clang" --version | head -n1
+          # bin/clang may be a symlink to the versioned binary; use -e not -f
+          CLANG="$TOOLCHAIN_DIR/bin/clang"
+          if [ ! -e "$CLANG" ]; then
+            # fall back to first versioned binary
+            CLANG=$(ls "$TOOLCHAIN_DIR/bin/clang-"[0-9]* 2>/dev/null | head -n1)
+          fi
+          if [ -z "$CLANG" ] || [ ! -e "$CLANG" ]; then
+            echo "::error::No clang binary found in $TOOLCHAIN_DIR/bin/"
+            ls -la "$TOOLCHAIN_DIR/bin/" | head -20 || true
+            exit 1
+          fi
+          echo "Using: $CLANG"
+          "$CLANG" --version | head -n1
 
       # ── 10. Restore ccache ──────────────────────────────────────────────────
       - name: ♻️ Restore CCache
